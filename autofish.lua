@@ -41,18 +41,20 @@ local rodIdx = 1
 
 -- ── Timing & Feature Config ──────────────────────────
 local CFG = {
-	castHold    = 1.8,
-	biteWait    = 15.0,
-	recastDly   = 0.9,
-	jitter      = true,
-	coordJitter = true,
-	fatigueOn   = true,
-	fatEvery    = 25,
-	fatDur      = 8,
-	antiAFK     = true,
-	adminGuard  = true,
-	watchdog    = true,
-	netAdapt    = true,   -- adapt timing ketika jaringan lag
+	castHold         = 1.8,
+	biteWait         = 15.0,
+	recastDly        = 0.9,
+	jitter           = true,
+	coordJitter      = true,
+	fatigueOn        = true,
+	fatEvery         = 25,
+	fatDur           = 8,
+	antiAFK          = true,
+	adminGuard       = true,
+	watchdog         = true,
+	netAdapt         = true,
+	autoRejoin       = true,
+	autoDeclineCarry = true,
 }
 
 local FISH_TOOLS = { "Fishing Rod", "Rod", "Pancing", "FishingRod" }
@@ -79,6 +81,7 @@ local idleAt      = os.clock()
 local fishCount   = 0
 local sessStart   = os.clock()
 local fatCnt      = 0
+local lastAFKPos  = nil   -- posisi afk terakhir untuk auto-rejoin
 
 -- Lag detector — rolling average frame time
 local lagAvg   = 0.016
@@ -185,23 +188,18 @@ if not pcall(function() gui.Parent = game:GetService("CoreGui") end) then
 	gui.Parent = me:WaitForChild("PlayerGui")
 end
 
--- ── Warm Luxury Palette ──────────────────────────────
--- Tidak menggunakan biru atau ungu. Tema: warm charcoal + gold.
+-- ── Palette: Warm Charcoal + Gold (satu warna aksen)
 local C = {
-	bg     = Color3.fromRGB(13,  12,  11),   -- latar utama
-	bg2    = Color3.fromRGB(19,  18,  15),   -- header/tabbar
-	card   = Color3.fromRGB(24,  22,  19),   -- kartu konten
-	border = Color3.fromRGB(44,  40,  33),   -- garis batas halus
-	gold   = Color3.fromRGB(176, 140,  76),  -- aksen utama (gold)
-	goldHi = Color3.fromRGB(212, 172, 106),  -- gold terang
-	sage   = Color3.fromRGB( 86, 138,  82),  -- hijau sage (sukses)
-	amber  = Color3.fromRGB(196, 126,  48),  -- amber (peringatan/cast)
-	rust   = Color3.fromRGB(158,  66,  62),  -- merah muted (bahaya)
-	txt    = Color3.fromRGB(232, 226, 213),  -- teks utama (ivory)
-	dim    = Color3.fromRGB(148, 140, 124),  -- teks sekunder
-	muted  = Color3.fromRGB( 72,  67,  57),  -- teks sangat redup
-	swOn   = Color3.fromRGB( 86, 138,  82),  -- toggle ON (sage)
-	swOff  = Color3.fromRGB( 32,  30,  25),  -- toggle OFF
+	bg     = Color3.fromRGB(13,  12,  11),
+	bg2    = Color3.fromRGB(19,  18,  15),
+	card   = Color3.fromRGB(24,  22,  19),
+	border = Color3.fromRGB(44,  40,  33),
+	gold   = Color3.fromRGB(176, 140,  76),
+	txt    = Color3.fromRGB(232, 226, 213),
+	dim    = Color3.fromRGB(148, 140, 124),
+	muted  = Color3.fromRGB( 72,  67,  57),
+	swOn   = Color3.fromRGB(176, 140,  76),
+	swOff  = Color3.fromRGB( 32,  30,  25),
 }
 
 -- ── GUI Builder Helpers ──────────────────────────────
@@ -309,16 +307,18 @@ main.Draggable        = true
 rnd(main, 11)
 mkStroke(main, C.border, 1)
 
--- Float button (visible when hidden)
+-- Float button (visible when hidden, draggable)
 local floatBtn = Instance.new("TextButton", gui)
 floatBtn.Size             = UDim2.new(0, 42, 0, 42)
-floatBtn.Position         = UDim2.new(1, -56, 0.5, -192)
+floatBtn.Position         = UDim2.new(1, -56, 0.5, -21)
 floatBtn.BackgroundColor3 = C.bg2
 floatBtn.Text             = "NF"
 floatBtn.TextColor3       = C.gold
 floatBtn.Font             = Enum.Font.GothamBold
 floatBtn.TextSize         = 11
 floatBtn.BorderSizePixel  = 0
+floatBtn.Active           = true
+floatBtn.Draggable        = true
 floatBtn.Visible          = false
 rnd(floatBtn, 21)
 mkStroke(floatBtn, C.gold, 1)
@@ -351,13 +351,13 @@ mark.BackgroundColor3 = C.gold
 mark.BorderSizePixel  = 0
 rnd(mark, 2)
 
-local titleL = mkLbl(hdr, "Nazhan Fish", 13, Enum.Font.GothamBold, C.txt)
-titleL.Size     = UDim2.new(0, 180, 0, 18)
-titleL.Position = UDim2.new(0, 20, 0, 8)
+local titleL = mkLbl(hdr, "NazhanHub(free)", 12, Enum.Font.GothamBold, C.txt)
+titleL.Size     = UDim2.new(0, 210, 0, 17)
+titleL.Position = UDim2.new(0, 20, 0, 9)
 
 local subL = mkLbl(hdr, "Auto Fishing System", 9, Enum.Font.Gotham, C.muted)
-subL.Size     = UDim2.new(0, 180, 0, 13)
-subL.Position = UDim2.new(0, 20, 0, 27)
+subL.Size     = UDim2.new(0, 210, 0, 13)
+subL.Position = UDim2.new(0, 20, 0, 28)
 
 local hideBtn = mkBtn(hdr, "—", C.bg, C.muted, 12)
 hideBtn.Size     = UDim2.new(0, 26, 0, 20)
@@ -517,7 +517,7 @@ barFill.BorderSizePixel  = 0
 rnd(barFill, 1)
 
 local phNames  = { "Cast", "Wait", "Game", "Done" }
-local phColors = { C.gold, C.amber, C.rust, C.sage }
+local phColors = { C.gold, C.gold, C.gold, C.gold }
 local phLbls   = {}
 for i, pn in ipairs(phNames) do
 	local pl = Instance.new("TextLabel", phCont)
@@ -614,7 +614,7 @@ local mainToggle= mkToggle(pM, 173, "Auto Fishing", false, function(on)
 	active = on
 	if on then
 		fishState = "IDLE"; idleAt = os.clock()
-		setDot(C.sage); setPhase(0); stateL.Text = "Memulai..."
+		setDot(C.gold); setPhase(0); stateL.Text = "Memulai..."
 	else
 		active = false; isSpace = false
 		pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.Space, false, game) end)
@@ -624,10 +624,10 @@ local mainToggle= mkToggle(pM, 173, "Auto Fishing", false, function(on)
 end)
 
 -- Reset button
-local rstBtn = mkBtn(pM, "Reset", Color3.fromRGB(32, 22, 21), C.rust, 10)
+local rstBtn = mkBtn(pM, "Reset", C.card, C.dim, 10)
 rstBtn.Size     = UDim2.new(1, -20, 0, 24)
 rstBtn.Position = UDim2.new(0, 10, 0, 208)
-mkStroke(rstBtn, Color3.fromRGB(58, 34, 32))
+mkStroke(rstBtn, C.border)
 
 rstBtn.MouseButton1Click:Connect(function()
 	if doReset then doReset("manual") end
@@ -662,11 +662,11 @@ task.spawn(function()
 		rateL.Text     = string.format("Rate %.1f/jam  |  Sesi %02d:%02d:%02d", rate, h, m, s)
 		-- lag indicator update
 		if lagAvg > 0.10 then
-			lagL.Text = "Jaringan: sangat lambat — toleransi diperlebar"
-			lagL.TextColor3 = C.rust
+			lagL.Text = "Jaringan: sangat lambat"
+			lagL.TextColor3 = C.dim
 		elseif lagAvg > 0.05 then
-			lagL.Text = "Jaringan: sedikit lag — sistem beradaptasi"
-			lagL.TextColor3 = C.amber
+			lagL.Text = "Jaringan: sedikit lag"
+			lagL.TextColor3 = C.dim
 		else
 			lagL.Text = "Jaringan: normal"
 			lagL.TextColor3 = C.muted
@@ -760,6 +760,7 @@ local function doTeleport(pos)
 	local ch   = me.Character
 	local root = ch and ch:FindFirstChild("HumanoidRootPart")
 	if not root then return end
+	lastAFKPos = pos   -- simpan untuk auto-rejoin
 	spawnPlat(pos)
 	task.wait(0.08)
 	root.CFrame = CFrame.new(pos)
@@ -768,9 +769,9 @@ end
 local renderSpots  -- forward declare
 
 renderSpots = function()
-	-- clear existing rows
+	-- clear existing rows (Frame dan TextLabel)
 	for _, ch in ipairs(spSF:GetChildren()) do
-		if ch:IsA("Frame") then ch:Destroy() end
+		if ch:IsA("Frame") or ch:IsA("TextLabel") then ch:Destroy() end
 	end
 
 	spCountL.Text = string.format("%d / %d", #spots, MAX_SPOTS)
@@ -809,7 +810,7 @@ renderSpots = function()
 		goBtn.Size     = UDim2.new(0, 46, 0, 20)
 		goBtn.Position = UDim2.new(1, -100, 0.5, -10)
 
-		local delBtn = mkBtn(row, "Hapus", Color3.fromRGB(36,24,24), C.rust, 9)
+		local delBtn = mkBtn(row, "Hapus", C.card, C.dim, 9)
 		delBtn.Size     = UDim2.new(0, 44, 0, 20)
 		delBtn.Position = UDim2.new(1, -50, 0.5, -10)
 
@@ -872,25 +873,35 @@ local function sSection(lbl, y)
 end
 
 local sy = 10
-sSection("PEMANCIAN", sy)
-sy = sy + 20
-mkToggle(sScroll, sy, "Jitter Timing Cast",    CFG.jitter,      function(v) CFG.jitter=v end); sy=sy+32
-mkToggle(sScroll, sy, "Jitter Posisi Kursor",  CFG.coordJitter, function(v) CFG.coordJitter=v end); sy=sy+32
-mkToggle(sScroll, sy, "Istirahat Otomatis",    CFG.fatigueOn,   function(v) CFG.fatigueOn=v end); sy=sy+32
+sSection("PEMANCIAN", sy); sy = sy + 20
+mkToggle(sScroll, sy, "Jitter Timing Cast",   CFG.jitter,      function(v) CFG.jitter=v end);      sy=sy+32
+mkToggle(sScroll, sy, "Jitter Posisi Kursor", CFG.coordJitter, function(v) CFG.coordJitter=v end); sy=sy+32
+mkToggle(sScroll, sy, "Istirahat Otomatis",   CFG.fatigueOn,   function(v) CFG.fatigueOn=v end);   sy=sy+32
 
 sSection("JARINGAN", sy); sy=sy+20
-mkToggle(sScroll, sy, "Adaptasi Lag Jaringan", CFG.netAdapt,    function(v) CFG.netAdapt=v end); sy=sy+32
+mkToggle(sScroll, sy, "Adaptasi Lag Jaringan", CFG.netAdapt, function(v) CFG.netAdapt=v end); sy=sy+32
 
-local lagHintL = mkLbl(sScroll, "Saat lag, toleransi minigame diperlebar\notomatis sesuai rata-rata frame time.", 8.5, Enum.Font.Gotham, C.muted)
-lagHintL.Size     = UDim2.new(1, -24, 0, 28)
-lagHintL.Position = UDim2.new(0, 12, 0, sy)
-lagHintL.TextWrapped = true
-sy = sy + 34
+local lagHintL = mkLbl(sScroll, "Toleransi minigame dan watchdog otomatis diperlebar saat jaringan lambat.", 8.5, Enum.Font.Gotham, C.muted)
+lagHintL.Size = UDim2.new(1, -24, 0, 24); lagHintL.Position = UDim2.new(0, 12, 0, sy)
+lagHintL.TextWrapped = true; sy = sy + 30
+
+sSection("KARAKTER", sy); sy=sy+20
+mkToggle(sScroll, sy, "Auto Kembali ke Spot (Rejoin)", CFG.autoRejoin, function(v) CFG.autoRejoin=v end); sy=sy+32
+
+local rejoinHintL = mkLbl(sScroll, "Setelah mati atau respawn, otomatis teleport ke spot AFK terakhir.", 8.5, Enum.Font.Gotham, C.muted)
+rejoinHintL.Size = UDim2.new(1, -24, 0, 24); rejoinHintL.Position = UDim2.new(0, 12, 0, sy)
+rejoinHintL.TextWrapped = true; sy = sy + 30
+
+mkToggle(sScroll, sy, "Tolak Carry Otomatis", CFG.autoDeclineCarry, function(v) CFG.autoDeclineCarry=v end); sy=sy+32
+
+local carryHintL = mkLbl(sScroll, "Carry request dari pemain lain otomatis ditolak saat sedang mancing.", 8.5, Enum.Font.Gotham, C.muted)
+carryHintL.Size = UDim2.new(1, -24, 0, 24); carryHintL.Position = UDim2.new(0, 12, 0, sy)
+carryHintL.TextWrapped = true; sy = sy + 30
 
 sSection("KEAMANAN", sy); sy=sy+20
-mkToggle(sScroll, sy, "Anti-AFK Mouse Sweep",  CFG.antiAFK,     function(v) CFG.antiAFK=v end); sy=sy+32
-mkToggle(sScroll, sy, "Admin Guard (Auto-Kick)",CFG.adminGuard,  function(v) CFG.adminGuard=v end); sy=sy+32
-mkToggle(sScroll, sy, "Watchdog Auto-Reset",   CFG.watchdog,    function(v) CFG.watchdog=v end); sy=sy+32
+mkToggle(sScroll, sy, "Anti-AFK Mouse Sweep",   CFG.antiAFK,    function(v) CFG.antiAFK=v end);    sy=sy+32
+mkToggle(sScroll, sy, "Admin Guard (Auto-Kick)", CFG.adminGuard, function(v) CFG.adminGuard=v end); sy=sy+32
+mkToggle(sScroll, sy, "Watchdog Auto-Reset",    CFG.watchdog,   function(v) CFG.watchdog=v end);   sy=sy+32
 
 sScroll.CanvasSize = UDim2.new(0, 0, 0, sy + 10)
 
@@ -898,6 +909,81 @@ sScroll.CanvasSize = UDim2.new(0, 0, 0, sy + 10)
 -- TAB 4 — NOTIF (Webhook)
 -- ════════════════════════════════════════════════════
 local pN = panels["Notif"]
+
+local nSF = Instance.new("ScrollingFrame", pN)
+nSF.Size               = UDim2.new(1, 0, 1, 0)
+nSF.BackgroundTransparency = 1
+nSF.BorderSizePixel    = 0
+nSF.CanvasSize         = UDim2.new(0, 0, 0, 340)
+nSF.ScrollBarThickness = 2
+nSF.ScrollBarImageColor3 = C.border
+
+-- Tutorial
+local function nLabel(txt, y, size, col)
+	local l = mkLbl(nSF, txt, size or 9, Enum.Font.Gotham, col or C.dim)
+	l.Size = UDim2.new(1, -24, 0, (size or 9) + 5)
+	l.Position = UDim2.new(0, 12, 0, y)
+	return l
+end
+
+local nHdr = mkLbl(nSF, "CARA MENAMBAHKAN WEBHOOK", 8, Enum.Font.GothamBold, C.muted)
+nHdr.Size = UDim2.new(1, -24, 0, 12); nHdr.Position = UDim2.new(0, 12, 0, 10)
+mkSep(nSF, 26)
+
+local tutLines = {
+	"1.  Buka server Discord kamu",
+	"2.  Klik Edit Channel pada channel tujuan",
+	"3.  Pilih tab Integrations, klik Webhooks",
+	"4.  Klik New Webhook dan beri nama bebas",
+	"5.  Klik Copy Webhook URL",
+	"6.  Paste URL di kolom di bawah ini",
+	"7.  Aktifkan toggle, lalu klik Test",
+}
+local ny = 32
+for _, ln in ipairs(tutLines) do
+	local tl = mkLbl(nSF, ln, 9, Enum.Font.Gotham, C.dim)
+	tl.Size = UDim2.new(1, -24, 0, 14); tl.Position = UDim2.new(0, 12, 0, ny)
+	ny = ny + 15
+end
+mkSep(nSF, ny + 4); ny = ny + 14
+
+-- Konfigurasi
+local nCfgH = mkLbl(nSF, "KONFIGURASI", 8, Enum.Font.GothamBold, C.muted)
+nCfgH.Size = UDim2.new(1, -24, 0, 12); nCfgH.Position = UDim2.new(0, 12, 0, ny)
+ny = ny + 16; mkSep(nSF, ny); ny = ny + 8
+
+-- URL label
+nLabel("Webhook URL", ny, 9, C.dim); ny = ny + 16
+
+local wBox = Instance.new("TextBox", nSF)
+wBox.Size = UDim2.new(1, -24, 0, 26); wBox.Position = UDim2.new(0, 12, 0, ny)
+wBox.BackgroundColor3 = C.card; wBox.TextColor3 = C.txt
+wBox.PlaceholderText = "https://discord.com/api/webhooks/..."
+wBox.PlaceholderColor3 = C.muted; wBox.Text = webhookURL
+wBox.ClearTextOnFocus = false; wBox.Font = Enum.Font.Code
+wBox.TextSize = 8.5; wBox.TextXAlignment = Enum.TextXAlignment.Left
+wBox.BorderSizePixel = 0
+rnd(wBox, 5); mkStroke(wBox, C.border)
+local wbP = Instance.new("UIPadding", wBox); wbP.PaddingLeft = UDim.new(0, 8)
+wBox.FocusLost:Connect(function() webhookURL = wBox.Text end)
+ny = ny + 32
+
+mkToggle(nSF, ny, "Aktifkan Notifikasi Discord", false, function(v) webhookOn = v end); ny = ny + 32
+
+local testBtn = mkBtn(nSF, "Kirim Test Notifikasi", C.card, C.dim, 9.5)
+testBtn.Size = UDim2.new(1, -24, 0, 26); testBtn.Position = UDim2.new(0, 12, 0, ny)
+mkStroke(testBtn, C.border)
+testBtn.MouseButton1Click:Connect(function()
+	sendWebhook("Test Notifikasi", "Webhook berhasil terhubung dari Roblox.", 0xb49352)
+end)
+ny = ny + 32
+
+mkSep(nSF, ny + 2); ny = ny + 12
+local nInfo = mkLbl(nSF, "Notif dikirim saat: setiap 10 ikan tertangkap, watchdog reset, admin terdeteksi di server.", 8.5, Enum.Font.Gotham, C.muted)
+nInfo.Size = UDim2.new(1, -24, 0, 28); nInfo.Position = UDim2.new(0, 12, 0, ny)
+nInfo.TextWrapped = true; ny = ny + 32
+
+nSF.CanvasSize = UDim2.new(0, 0, 0, ny + 8)
 
 -- Tutorial card
 local tutCard = Instance.new("Frame", pN)
@@ -987,26 +1073,24 @@ local pL = panels["Log"]
 
 local logEnabled = false
 
+-- Header
+local logHdrL = mkLbl(pL, "CONSOLE LOG", 8, Enum.Font.GothamBold, C.muted)
+logHdrL.Size = UDim2.new(1, -20, 0, 12); logHdrL.Position = UDim2.new(0, 10, 0, 10)
+mkSep(pL, 26)
+
 local logToggle = mkBtn(pL, "Log: OFF", C.card, C.muted, 9.5)
-logToggle.Size     = UDim2.new(0, 70, 0, 22)
-logToggle.Position = UDim2.new(0, 10, 0, 8)
+logToggle.Size = UDim2.new(0, 68, 0, 22); logToggle.Position = UDim2.new(0, 10, 0, 32)
 mkStroke(logToggle, C.border)
 
-local logClear = mkBtn(pL, "Hapus", C.card, C.muted, 9.5)
-logClear.Size     = UDim2.new(0, 56, 0, 22)
-logClear.Position = UDim2.new(0, 86, 0, 8)
+local logClear = mkBtn(pL, "Hapus Semua", C.card, C.muted, 9.5)
+logClear.Size = UDim2.new(0, 84, 0, 22); logClear.Position = UDim2.new(0, 84, 0, 32)
 mkStroke(logClear, C.border)
 
-local logInfoL = mkLbl(pL, "Log aktif hanya saat tab Log dipilih.", 8.5, Enum.Font.Gotham, C.muted)
-logInfoL.Size     = UDim2.new(1, -180, 0, 22)
-logInfoL.Position = UDim2.new(0, 150, 0, 10)
-logInfoL.TextXAlignment = Enum.TextXAlignment.Right
-
-mkSep(pL, 36)
+mkSep(pL, 60)
 
 local logSF = Instance.new("ScrollingFrame", pL)
-logSF.Size             = UDim2.new(1, -20, 1, -44)
-logSF.Position         = UDim2.new(0, 10, 0, 42)
+logSF.Size             = UDim2.new(1, -20, 1, -68)
+logSF.Position         = UDim2.new(0, 10, 0, 66)
 logSF.BackgroundColor3 = C.card
 logSF.BorderSizePixel  = 0
 rnd(logSF, 6)
@@ -1017,13 +1101,13 @@ logSF.ScrollBarImageColor3= C.border
 
 local logPad = Instance.new("UIPadding", logSF)
 logPad.PaddingTop    = UDim.new(0, 5)
-logPad.PaddingLeft   = UDim.new(0, 6)
+logPad.PaddingLeft   = UDim.new(0, 8)
 logPad.PaddingRight  = UDim.new(0, 4)
 logPad.PaddingBottom = UDim.new(0, 5)
 
-local logLL  = Instance.new("UIListLayout", logSF)
+local logLL = Instance.new("UIListLayout", logSF)
 logLL.SortOrder = Enum.SortOrder.LayoutOrder
-logLL.Padding   = UDim.new(0, 2)
+logLL.Padding   = UDim.new(0, 1)
 
 local logN = 0
 local function addLog(txt)
@@ -1043,7 +1127,6 @@ local function addLog(txt)
 		logSF.CanvasSize     = UDim2.new(0, 0, 0, logLL.AbsoluteContentSize.Y + 8)
 		logSF.CanvasPosition = Vector2.new(0, math.huge)
 	end)
-	-- trim
 	local kids = {}
 	for _, k in ipairs(logSF:GetChildren()) do
 		if k:IsA("TextLabel") then kids[#kids+1] = k end
@@ -1053,12 +1136,9 @@ end
 
 logToggle.MouseButton1Click:Connect(function()
 	logEnabled = not logEnabled
-	logToggle.Text      = logEnabled and "Log: ON" or "Log: OFF"
-	logToggle.TextColor3= logEnabled and C.sage or C.muted
-	local origBg = logEnabled and Color3.fromRGB(18, 26, 18) or C.card
-	logToggle.BackgroundColor3 = origBg
+	logToggle.Text       = logEnabled and "Log: ON" or "Log: OFF"
+	logToggle.TextColor3 = logEnabled and C.gold or C.muted
 end)
-
 logClear.MouseButton1Click:Connect(function()
 	for _, k in ipairs(logSF:GetChildren()) do
 		if k:IsA("TextLabel") then k:Destroy() end
@@ -1188,9 +1268,9 @@ local function doFatigue()
 	setSpace(false, true)
 	setPhase(0)
 	stateL.Text = "Istirahat " .. CFG.fatDur .. "s"
-	setDot(C.amber)
+	setDot(C.gold)
 	task.wait(CFG.fatDur)
-	setDot(C.sage)
+	setDot(C.gold)
 end
 
 doReset = function(reason)
@@ -1206,7 +1286,7 @@ doReset = function(reason)
 	idleAt      = os.clock()
 	pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.Space, false, game) end)
 	setPhase(0)
-	if active then stateL.Text = "Idle"; setDot(C.sage) end
+	if active then stateL.Text = "Idle"; setDot(C.gold) end
 	if reason then addLog("Reset: " .. reason) end
 end
 
@@ -1218,7 +1298,7 @@ local function onCatch(why)
 	fishCount = fishCount + 1
 	fishCountL.Text = "Tangkapan: " .. fishCount .. " ikan"
 	stateL.Text     = "Caught #" .. fishCount
-	setDot(C.sage)
+	setDot(C.gold)
 	addLog("Caught #" .. fishCount .. "  (" .. why .. ")")
 
 	if fishCount == 1 or fishCount % 10 == 0 then
@@ -1353,7 +1433,7 @@ task.spawn(function()
 			end
 			local tool = findAndEquipRod()
 			if not tool then
-				stateL.Text = "Tidak ada rod!"; setDot(C.rust); return
+				stateL.Text = "Tidak ada rod!"; setDot(C.gold); return
 			end
 			if fishState == "IDLE" and not isCasting then
 				isCasting = true; castSess = castSess + 1
@@ -1367,7 +1447,7 @@ task.spawn(function()
 					local rod = RODS[rodIdx]
 					local ctr = jv(cam.ViewportSize / 2)
 					fishState = "CASTING"; setPhase(1); setPct(0)
-					stateL.Text = "Casting..."; setDot(C.amber)
+					stateL.Text = "Casting..."; setDot(C.gold)
 					pcall(function() tool:Activate() end)
 					pcall(function() VU:Button1Down(ctr, cam.CFrame) end)
 					-- Perpanjang durasi cast saat lag
@@ -1390,7 +1470,7 @@ task.spawn(function()
 					end
 					fishState = "WAITING"; biteStart = os.clock()
 					setPhase(2); setPct(0)
-					stateL.Text = "Menunggu..."; setDot(C.amber)
+					stateL.Text = "Menunggu..."; setDot(C.gold)
 					addLog("Cast #" .. castSess)
 					isCasting = false
 				end)
@@ -1488,10 +1568,52 @@ for _, p in ipairs(Players:GetPlayers()) do task.spawn(checkPlayer, p) end
 local paConn = Players.PlayerAdded:Connect(function(p) task.spawn(checkPlayer, p) end)
 table.insert(_S.c, paConn)
 
--- Startup notification
-task.delay(1.2, function()
-	sendWebhook("Script Aktif", "Nazhan Fish v2.0 berhasil dijalankan dan siap digunakan.", 0xb49352)
+-- Auto-rejoin: teleport ke spot terakhir setelah respawn
+local function onCharAdded(char)
+	if not CFG.autoRejoin or not lastAFKPos then return end
+	task.spawn(function()
+		local root = char:WaitForChild("HumanoidRootPart", 8)
+		if not root then return end
+		task.wait(2.5)
+		if not _S.alive or not lastAFKPos then return end
+		spawnPlat(lastAFKPos)
+		task.wait(0.12)
+		root.CFrame = CFrame.new(lastAFKPos)
+		addLog("Auto-kembali ke spot terakhir")
+		task.wait(0.5)
+		if active and doReset then doReset("auto-rejoin") end
+	end)
+end
+local charConn = me.CharacterAdded:Connect(onCharAdded)
+table.insert(_S.c, charConn)
+
+-- Auto-decline carry request
+pcall(function()
+	local pg = me:FindFirstChild("PlayerGui")
+	if not pg then return end
+	local conn = pg.ChildAdded:Connect(function(child)
+		if not CFG.autoDeclineCarry then return end
+		task.wait(0.7)
+		if not child or not child.Parent then return end
+		for _, v in ipairs(child:GetDescendants()) do
+			if v:IsA("TextButton") then
+				local t = v.Text:lower()
+				if t == "decline" or t == "tolak" or t == "no"
+					or t:find("decline") or t:find("tolak") or t:find("reject") then
+					pcall(function() v.MouseButton1Click:Fire() end)
+					addLog("Carry request ditolak otomatis")
+					return
+				end
+			end
+		end
+	end)
+	table.insert(_S.c, conn)
 end)
 
-addLog("Nazhan Fish v2.0 siap.")
+-- Startup notification
+task.delay(1.2, function()
+	sendWebhook("NazhanHub Aktif", "NazhanHub(free) v2.0 berhasil dijalankan.", 0xb49352)
+end)
+
+addLog("NazhanHub(free) v2.0 siap.")
 setPhase(0)
