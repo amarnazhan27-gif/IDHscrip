@@ -1,4 +1,3 @@
-
 if shared.NH_v9 then pcall(shared.NH_v9.kill) end
 
 local M = { c = {}, on = true }
