@@ -1,503 +1,449 @@
--- ╔══════════════════════════════════════════════════════════╗
--- ║            NAZHAN FISHING SYSTEM — v1.0                 ║
--- ║         khusus fishing | ringan | anti-ngeleg           ║
--- ║              by nazhan • Indo Hangout                   ║
--- ╚══════════════════════════════════════════════════════════╝
+-- ┌──────────────────────────────────────────────────┐
+-- │   Nazhan Fish  v2.0  •  by nazhan               │
+-- │   auto fishing | custom spot | webhook notif    │
+-- └──────────────────────────────────────────────────┘
 
-if shared._NZH_fish then
-	pcall(shared._NZH_fish.destroy)
-end
+if shared._nzh2 then pcall(shared._nzh2.stop) end
 
--- ─── Module ──────────────────────────────────────────────
-local NF = {
-	alive = true,
-	conns = {},
-}
-function NF.destroy()
-	NF.alive = false
-	for _, c in ipairs(NF.conns) do
-		pcall(function() c:Disconnect() end)
-	end
-	table.clear(NF.conns)
-	-- cleanup ghost platform jika ada
+local _S = { alive = true, c = {} }
+_S.stop = function()
+	_S.alive = false
+	for _, v in ipairs(_S.c) do pcall(function() v:Disconnect() end) end
+	table.clear(_S.c)
 	pcall(function()
-		local pt = workspace:FindFirstChild("__nzh_plat")
+		local pt = workspace:FindFirstChild("_nzh_p")
 		if pt then pt:Destroy() end
-	end)
-	-- lepas semua key virtual
-	pcall(function()
-		local VIM = game:GetService("VirtualInputManager")
-		VIM:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
+		game:GetService("VirtualInputManager"):SendKeyEvent(false, Enum.KeyCode.Space, false, game)
 	end)
 end
-shared._NZH_fish = NF
+shared._nzh2 = _S
 
--- ─── Services ────────────────────────────────────────────
-local Players  = game:GetService("Players")
-local RS       = game:GetService("RunService")
-local VIM      = game:GetService("VirtualInputManager")
-local VU       = game:GetService("VirtualUser")
-local TS       = game:GetService("TweenService")
-local HTTP     = game:GetService("HttpService")
-local me       = Players.LocalPlayer
+-- ── Services ────────────────────────────────────────
+local Players = game:GetService("Players")
+local RS      = game:GetService("RunService")
+local VIM     = game:GetService("VirtualInputManager")
+local VU      = game:GetService("VirtualUser")
+local TS      = game:GetService("TweenService")
+local HTTP    = game:GetService("HttpService")
+local me      = Players.LocalPlayer
 
--- ─── Rod Profiles ─────────────────────────────────────────
+-- ── Rod Profiles ────────────────────────────────────
 local RODS = {
-	{ n="Basic Rod",    lure=1.00, prog=1.00 },
-	{ n="Party Rod",    lure=1.30, prog=1.08 },
-	{ n="Shark Rod",    lure=1.57, prog=1.21 },
-	{ n="Piranha Rod",  lure=1.84, prog=1.33 },
-	{ n="Thermo Rod",   lure=2.11, prog=1.46 },
-	{ n="Flowers Rod",  lure=2.38, prog=1.59 },
-	{ n="Trisula Rod",  lure=2.65, prog=1.72 },
-	{ n="Feather Rod",  lure=2.92, prog=1.84 },
-	{ n="Wave Rod",     lure=3.19, prog=1.97 },
-	{ n="Duck Rod",     lure=3.46, prog=2.10 },
-	{ n="Planet Rod",   lure=3.73, prog=2.23 },
-	{ n="Earth Rod",    lure=4.00, prog=2.35 },
-	{ n="Volcano Rod",  lure=4.27, prog=2.48 },
+	{ n="Basic Rod",   lure=1.00, prog=1.00 }, { n="Party Rod",   lure=1.30, prog=1.08 },
+	{ n="Shark Rod",   lure=1.57, prog=1.21 }, { n="Piranha Rod", lure=1.84, prog=1.33 },
+	{ n="Thermo Rod",  lure=2.11, prog=1.46 }, { n="Flowers Rod", lure=2.38, prog=1.59 },
+	{ n="Trisula Rod", lure=2.65, prog=1.72 }, { n="Feather Rod", lure=2.92, prog=1.84 },
+	{ n="Wave Rod",    lure=3.19, prog=1.97 }, { n="Duck Rod",    lure=3.46, prog=2.10 },
+	{ n="Planet Rod",  lure=3.73, prog=2.23 }, { n="Earth Rod",   lure=4.00, prog=2.35 },
+	{ n="Volcano Rod", lure=4.27, prog=2.48 },
 }
 local rodIdx = 1
 
--- ─── Teleport Spots ───────────────────────────────────────
--- Koordinat spot tersembunyi di map Indo Hangout
--- Y sedikit lebih tinggi agar platform spawn dengan benar
-local SPOTS = {
-	{ label="🌊 Tengah Laut",          pos=Vector3.new(1840, 6, 1760)   },
-	{ label="🏔️ Sisi Gunung Utara",   pos=Vector3.new(-420, 68, -1280) },
-	{ label="🏝️ Pulau Terpencil",     pos=Vector3.new(-1740, 5, 980)  },
-	{ label="⛵ Ujung Barat Laut",     pos=Vector3.new(-2100, 5, -900)  },
-	{ label="🌅 Sudut Timur Jauh",     pos=Vector3.new(2250, 5, -180)   },
-	{ label="🏞️ Sungai Tersembunyi",  pos=Vector3.new(380, 2, -1540)   },
-	{ label="🪨 Balik Tebing Karang",  pos=Vector3.new(-820, 18, 1620)  },
-	{ label="💧 Muara Sunyi",          pos=Vector3.new(960, 2, 1340)    },
-}
-
--- ─── Timing Config ───────────────────────────────────────
+-- ── Timing & Feature Config ──────────────────────────
 local CFG = {
-	castHold   = 1.8,    -- lama tahan klik saat cast
-	biteWait   = 15.0,   -- detik tunggu gigitan
-	recastDly  = 1.0,    -- jeda sebelum recast
-	jitter     = true,   -- randomisasi kecil timing
-	coordJitter= true,   -- geser posisi kursor sedikit
-	fatigueOn  = true,   -- istirahat otomatis tiap N tangkapan
-	fatEvery   = 20,     -- istirahat tiap 20 tangkapan
-	fatDur     = 8,      -- durasi istirahat (detik)
-	antiAFK    = true,   -- gerak mouse biar tidak AFK-kicked
-	adminGuard = true,   -- kick diri sendiri jika admin masuk
-	watchdog   = true,   -- auto reset saat macet
+	castHold    = 1.8,
+	biteWait    = 15.0,
+	recastDly   = 0.9,
+	jitter      = true,
+	coordJitter = true,
+	fatigueOn   = true,
+	fatEvery    = 25,
+	fatDur      = 8,
+	antiAFK     = true,
+	adminGuard  = true,
+	watchdog    = true,
+	netAdapt    = true,   -- adapt timing ketika jaringan lag
 }
 
-local FISH_TOOLS = { "Fishing Rod","Rod","Pancing","FishingRod" }
+local FISH_TOOLS = { "Fishing Rod", "Rod", "Pancing", "FishingRod" }
 
--- ─── State Variables ─────────────────────────────────────
-local active     = false
-local fishState  = "IDLE"   -- IDLE / CASTING / WAITING / MINIGAME / DONE
-local isSpace    = false
-local lastSpTgl  = 0
-local biteStart  = 0
-local mgStart    = 0
-local mgLastSeen = 0
-local mgEverSeen = false
-local mgStarted  = false
-local successDone= false
-local isCasting  = false
-local wBar,rBar  = nil, nil
-local lastScan   = 0
-local lastWC     = nil
-local lastWTime  = os.clock()
-local wVel       = 0
-local castSess   = 0
-local idleAt     = os.clock()
+-- ── State ───────────────────────────────────────────
+local active      = false
+local fishState   = "IDLE"
+local isSpace     = false
+local lastSpTgl   = 0
+local biteStart   = 0
+local mgStart     = 0
+local mgLastSeen  = 0
+local mgEverSeen  = false
+local mgStarted   = false
+local successDone = false
+local isCasting   = false
+local wBar, rBar  = nil, nil
+local lastScan    = 0
+local lastWC      = nil
+local lastWTime   = os.clock()
+local wVel        = 0
+local castSess    = 0
+local idleAt      = os.clock()
+local fishCount   = 0
+local sessStart   = os.clock()
+local fatCnt      = 0
 
-local fishCount    = 0
-local sessionStart = os.clock()
-local fatigueCnt   = 0
+-- Lag detector — rolling average frame time
+local lagAvg   = 0.016
+local lagSmooth= 0.08
+local function updateLag(dt)
+	lagAvg = lagAvg * (1 - lagSmooth) + dt * lagSmooth
+end
+local function lagging() return CFG.netAdapt and lagAvg > 0.05 end
 
 -- Discord Webhook
-local webhookURL   = ""
-local webhookOn    = false
+local webhookURL = ""
+local webhookOn  = false
 
--- ─── Helpers ─────────────────────────────────────────────
-local function safe(fn)
-	xpcall(fn, function(e) warn("[NZH] "..tostring(e)) end)
+-- ── Custom Spots ────────────────────────────────────
+local SPOTS_FILE = "nzh_spots.json"
+local spots      = {}   -- { {name="..", x=0, y=0, z=0}, ... }
+local MAX_SPOTS  = 10
+
+local function saveSpots()
+	pcall(function()
+		if writefile then writefile(SPOTS_FILE, HTTP:JSONEncode(spots)) end
+	end)
 end
 
-local function jt(base, pct)
+local function loadSpots()
+	pcall(function()
+		if isfile and readfile and isfile(SPOTS_FILE) then
+			local ok, data = pcall(HTTP.JSONDecode, HTTP, readfile(SPOTS_FILE))
+			if ok and type(data) == "table" then spots = data end
+		end
+	end)
+end
+loadSpots()
+
+-- ── Helpers ─────────────────────────────────────────
+local function safe(fn) xpcall(fn, function(e) warn("[NF] "..tostring(e)) end) end
+
+local function jt(base, p)
 	if not CFG.jitter then return base end
-	return base * (1 + (math.random() * 2 - 1) * (pct or 0.1))
+	return base * (1 + (math.random() * 2 - 1) * (p or 0.09))
 end
 
 local function jv(v2)
 	if not CFG.coordJitter then return v2 end
-	return Vector2.new(v2.X + math.random(-14, 14), v2.Y + math.random(-10, 10))
+	return Vector2.new(v2.X + math.random(-12, 12), v2.Y + math.random(-8, 8))
 end
 
--- (visibility check is defined later near the fishing engine for locality)
-
--- ─── Discord Webhook ──────────────────────────────────────
-local function sendWebhook(title, body, color)
+-- ── Webhook ─────────────────────────────────────────
+local function sendWebhook(title, body, colorInt)
 	if not webhookOn or webhookURL == "" then return end
 	if not webhookURL:find("discord%.com/api/webhooks") then return end
 	task.spawn(function()
-		local elapsed = os.clock() - sessionStart
-		local h,m,s  = math.floor(elapsed/3600), math.floor(elapsed%3600/60), math.floor(elapsed%60)
-		local payload = HTTP:JSONEncode({
+		local el   = os.clock() - sessStart
+		local h, m, s = math.floor(el/3600), math.floor(el%3600/60), math.floor(el%60)
+		local rod  = RODS[rodIdx]
+		local ok, payload = pcall(HTTP.JSONEncode, HTTP, {
 			embeds = {{
 				title       = title,
 				description = body,
-				color       = color or 0x00aaff,
+				color       = colorInt or 0xb49352,
 				fields      = {
-					{ name="🎣 Total Tangkapan", value=tostring(fishCount),
-					  inline=true },
-					{ name="⏱️ Durasi Sesi",
-					  value=string.format("%02d:%02d:%02d", h, m, s),
-					  inline=true },
-					{ name="🪝 Rod Aktif", value=RODS[rodIdx].n, inline=true },
+					{ name = "Tangkapan",  value = tostring(fishCount),
+					  inline = true },
+					{ name = "Durasi",
+					  value = string.format("%02d:%02d:%02d", h, m, s),
+					  inline = true },
+					{ name = "Rod",  value = rod.n, inline = true },
 				},
-				footer = { text = "Nazhan Fishing System v1.0" },
-			}}
+				footer = { text = "Nazhan Fish v2.0" },
+			}},
 		})
-		local req = (syn and syn.request)
-			or (http and http.request)
-			or http_request or request
+		if not ok then return end
+		local req = (syn and syn.request) or (http and http.request) or http_request or request
 		if req then
-			pcall(function()
-				req({
-					Url    = webhookURL,
-					Method = "POST",
-					Headers= { ["Content-Type"] = "application/json" },
-					Body   = payload,
-				})
-			end)
+			pcall(req, {
+				Url     = webhookURL, Method = "POST",
+				Headers = { ["Content-Type"] = "application/json" },
+				Body    = payload,
+			})
 		end
 	end)
 end
 
--- ─── GUI Cleanup ──────────────────────────────────────────
+-- ── GUI Cleanup ──────────────────────────────────────
 pcall(function()
-	local names = { "_NZH_UI", "NH_v9_GUI", "IH_v5", "NH_v6_GUI" }
 	local cg = game:GetService("CoreGui")
-	for _, n in ipairs(names) do
-		local a = cg:FindFirstChild(n)
-		if a then a:Destroy() end
+	for _, n in ipairs({ "_NZH2", "_NZH_UI", "NH_v9_GUI", "IH_v5", "NH_v6_GUI" }) do
+		local a = cg:FindFirstChild(n); if a then a:Destroy() end
 		if me.PlayerGui then
-			local b = me.PlayerGui:FindFirstChild(n)
-			if b then b:Destroy() end
+			local b = me.PlayerGui:FindFirstChild(n); if b then b:Destroy() end
 		end
 	end
 end)
 
--- kecil delay biar tidak ada race condition dengan script lama
-task.wait(math.random() * 0.15 + 0.05)
+task.wait(math.random() * 0.12 + 0.04)
 
--- ─── ScreenGui ────────────────────────────────────────────
+-- ── ScreenGui ───────────────────────────────────────
 local gui = Instance.new("ScreenGui")
-gui.Name            = "_NZH_UI"
-gui.ResetOnSpawn    = false
-gui.DisplayOrder    = 20
-gui.IgnoreGuiInset  = false
+gui.Name           = "_NZH2"
+gui.ResetOnSpawn   = false
+gui.DisplayOrder   = 25
+gui.IgnoreGuiInset = false
 if not pcall(function() gui.Parent = game:GetService("CoreGui") end) then
 	gui.Parent = me:WaitForChild("PlayerGui")
 end
 
--- ─── Color Palette ───────────────────────────────────────
+-- ── Warm Luxury Palette ──────────────────────────────
+-- Tidak menggunakan biru atau ungu. Tema: warm charcoal + gold.
 local C = {
-	bg        = Color3.fromRGB(11, 12, 16),
-	bg2       = Color3.fromRGB(17, 19, 25),
-	card      = Color3.fromRGB(20, 22, 30),
-	border    = Color3.fromRGB(34, 37, 50),
-	accent    = Color3.fromRGB(0,  160, 255),
-	accentGlo = Color3.fromRGB(30, 200, 255),
-	green     = Color3.fromRGB(0,  210, 110),
-	orange    = Color3.fromRGB(255,165,  40),
-	red       = Color3.fromRGB(255, 60,  80),
-	txt       = Color3.fromRGB(228, 232, 242),
-	txtDim    = Color3.fromRGB(130, 136, 158),
-	txtMuted  = Color3.fromRGB(68,  72,  92),
-	sw_on     = Color3.fromRGB(0,  180, 100),
-	sw_off    = Color3.fromRGB(38,  41,  55),
+	bg     = Color3.fromRGB(13,  12,  11),   -- latar utama
+	bg2    = Color3.fromRGB(19,  18,  15),   -- header/tabbar
+	card   = Color3.fromRGB(24,  22,  19),   -- kartu konten
+	border = Color3.fromRGB(44,  40,  33),   -- garis batas halus
+	gold   = Color3.fromRGB(176, 140,  76),  -- aksen utama (gold)
+	goldHi = Color3.fromRGB(212, 172, 106),  -- gold terang
+	sage   = Color3.fromRGB( 86, 138,  82),  -- hijau sage (sukses)
+	amber  = Color3.fromRGB(196, 126,  48),  -- amber (peringatan/cast)
+	rust   = Color3.fromRGB(158,  66,  62),  -- merah muted (bahaya)
+	txt    = Color3.fromRGB(232, 226, 213),  -- teks utama (ivory)
+	dim    = Color3.fromRGB(148, 140, 124),  -- teks sekunder
+	muted  = Color3.fromRGB( 72,  67,  57),  -- teks sangat redup
+	swOn   = Color3.fromRGB( 86, 138,  82),  -- toggle ON (sage)
+	swOff  = Color3.fromRGB( 32,  30,  25),  -- toggle OFF
 }
 
--- ─── GUI Builder Helpers ──────────────────────────────────
+-- ── GUI Builder Helpers ──────────────────────────────
 local function rnd(obj, r)
-	Instance.new("UICorner", obj).CornerRadius = UDim.new(0, r)
+	Instance.new("UICorner", obj).CornerRadius = UDim.new(0, r or 6)
 end
 
-local function stroke(obj, col, thick)
+local function mkStroke(obj, col, thick)
 	local s = Instance.new("UIStroke", obj)
-	s.Color     = col or C.border
-	s.Thickness = thick or 1
+	s.Color = col or C.border; s.Thickness = thick or 1
 	return s
 end
 
-local function lbl(parent, props)
+local function mkLbl(parent, text, size, font, color)
 	local l = Instance.new("TextLabel", parent)
 	l.BackgroundTransparency = 1
-	l.Font     = props.font or Enum.Font.GothamMedium
-	l.TextSize = props.size or 12
-	l.TextColor3 = props.color or C.txt
-	l.TextXAlignment = props.xa or Enum.TextXAlignment.Left
+	l.Text           = text or ""
+	l.TextSize       = size or 11
+	l.Font           = font or Enum.Font.GothamMedium
+	l.TextColor3     = color or C.txt
+	l.TextXAlignment = Enum.TextXAlignment.Left
 	l.TextTruncate   = Enum.TextTruncate.AtEnd
-	l.Text     = props.text or ""
-	l.Size     = props.sz   or UDim2.new(1, 0, 0, 18)
-	l.Position = props.pos  or UDim2.new(0, 0, 0, 0)
+	l.Size           = UDim2.new(1, 0, 0, size and size + 4 or 15)
 	return l
 end
 
-local function btn(parent, props)
+local function mkBtn(parent, text, bg, tc, textSize)
 	local b = Instance.new("TextButton", parent)
-	b.BackgroundColor3 = props.bg   or C.card
-	b.Text             = props.text or ""
-	b.TextColor3       = props.tc   or C.txt
-	b.Font             = props.font or Enum.Font.GothamBold
-	b.TextSize         = props.size or 11
+	b.BackgroundColor3 = bg or C.card
+	b.Text             = text or ""
+	b.TextColor3       = tc or C.txt
+	b.Font             = Enum.Font.GothamBold
+	b.TextSize         = textSize or 10
 	b.BorderSizePixel  = 0
-	b.Size             = props.sz   or UDim2.new(0, 80, 0, 26)
-	b.Position         = props.pos  or UDim2.new(0, 0, 0, 0)
-	rnd(b, props.r or 7)
-	if props.border ~= false then stroke(b, props.bColor or C.border) end
-	-- hover feedback
-	local origBg = b.BackgroundColor3
-	local hoverBg = props.hover or origBg:Lerp(Color3.new(1,1,1), 0.06)
+	b.AutoButtonColor  = false
+	rnd(b, 5)
+	local orig = b.BackgroundColor3
+	local hi   = orig:Lerp(Color3.fromRGB(255, 255, 255), 0.07)
 	b.MouseEnter:Connect(function()
-		TS:Create(b, TweenInfo.new(0.14), {BackgroundColor3 = hoverBg}):Play()
+		TS:Create(b, TweenInfo.new(0.12), {BackgroundColor3 = hi}):Play()
 	end)
 	b.MouseLeave:Connect(function()
-		TS:Create(b, TweenInfo.new(0.14), {BackgroundColor3 = origBg}):Play()
+		TS:Create(b, TweenInfo.new(0.12), {BackgroundColor3 = orig}):Play()
 	end)
 	return b
 end
 
-local function mkToggle(parent, y, label, default, cb)
+local function mkToggle(parent, y, labelText, defVal, callback)
 	local row = Instance.new("Frame", parent)
-	row.Size = UDim2.new(1, -24, 0, 30)
-	row.Position = UDim2.new(0, 12, 0, y)
+	row.Size              = UDim2.new(1, -24, 0, 28)
+	row.Position          = UDim2.new(0, 12, 0, y)
 	row.BackgroundTransparency = 1
 
-	local ltext = lbl(row, {
-		text  = label,
-		sz    = UDim2.new(1, -50, 1, 0),
-		pos   = UDim2.new(0, 0, 0, 0),
-		size  = 11,
-		color = C.txtDim,
-	})
+	local lbl = mkLbl(row, labelText, 10, Enum.Font.GothamMedium, C.dim)
+	lbl.Size     = UDim2.new(1, -50, 1, 0)
+	lbl.Position = UDim2.new(0, 0, 0, 0)
 
 	local sw = Instance.new("TextButton", row)
-	sw.Size = UDim2.new(0, 36, 0, 19)
-	sw.Position = UDim2.new(1, -36, 0.5, -9)
-	sw.BackgroundColor3 = default and C.sw_on or C.sw_off
-	sw.Text = ""; sw.BorderSizePixel = 0
-	rnd(sw, 10)
+	sw.Size              = UDim2.new(0, 34, 0, 18)
+	sw.Position          = UDim2.new(1, -34, 0.5, -9)
+	sw.BackgroundColor3  = defVal and C.swOn or C.swOff
+	sw.Text              = ""
+	sw.BorderSizePixel   = 0
+	sw.AutoButtonColor   = false
+	rnd(sw, 9)
 
 	local knob = Instance.new("Frame", sw)
-	knob.Size = UDim2.new(0, 15, 0, 15)
-	knob.Position = default and UDim2.new(1,-17,0.5,-7) or UDim2.new(0,2,0.5,-7)
-	knob.BackgroundColor3 = Color3.new(1,1,1)
-	knob.BorderSizePixel = 0
-	rnd(knob, 10)
+	knob.Size              = UDim2.new(0, 14, 0, 14)
+	knob.Position          = defVal and UDim2.new(1,-16,0.5,-7) or UDim2.new(0,2,0.5,-7)
+	knob.BackgroundColor3  = Color3.new(1, 1, 1)
+	knob.BorderSizePixel   = 0
+	rnd(knob, 7)
 
-	local val = default
+	local val = defVal
 	sw.MouseButton1Click:Connect(function()
-		if not NF.alive then return end
+		if not _S.alive then return end
 		val = not val
-		TS:Create(sw,   TweenInfo.new(0.12), {BackgroundColor3 = val and C.sw_on or C.sw_off}):Play()
-		TS:Create(knob, TweenInfo.new(0.12), {
-			Position = val and UDim2.new(1,-17,0.5,-7) or UDim2.new(0,2,0.5,-7)
+		TS:Create(sw,   TweenInfo.new(0.1), {BackgroundColor3 = val and C.swOn or C.swOff}):Play()
+		TS:Create(knob, TweenInfo.new(0.1), {
+			Position = val and UDim2.new(1,-16,0.5,-7) or UDim2.new(0,2,0.5,-7)
 		}):Play()
-		cb(val)
+		callback(val)
 	end)
-	return row, sw
+	return sw
 end
 
-local function sep(parent, y)
+local function mkSep(parent, y)
 	local f = Instance.new("Frame", parent)
-	f.Size = UDim2.new(1, -24, 0, 1)
-	f.Position = UDim2.new(0, 12, 0, y)
-	f.BackgroundColor3 = C.border
-	f.BorderSizePixel = 0
+	f.Size              = UDim2.new(1, -24, 0, 1)
+	f.Position          = UDim2.new(0, 12, 0, y)
+	f.BackgroundColor3  = C.border
+	f.BorderSizePixel   = 0
 	return f
 end
 
--- ─── Main Frame ───────────────────────────────────────────
+-- ── Main Frame ───────────────────────────────────────
 local main = Instance.new("Frame", gui)
-main.Size     = UDim2.new(0, 310, 0, 430)
-main.Position = UDim2.new(1, -330, 0.5, -215)
+main.Size             = UDim2.new(0, 268, 0, 384)
+main.Position         = UDim2.new(1, -286, 0.5, -192)
 main.BackgroundColor3 = C.bg
-main.BackgroundTransparency = 0.04
-main.BorderSizePixel = 0
-main.Active    = true
-main.Draggable = true
-rnd(main, 13)
-local mainBorder = stroke(main, C.border, 1.2)
+main.BackgroundTransparency = 0.03
+main.BorderSizePixel  = 0
+main.Active           = true
+main.Draggable        = true
+rnd(main, 11)
+mkStroke(main, C.border, 1)
 
--- subtle gradient border glow
-local bGrad = Instance.new("UIGradient", mainBorder)
-bGrad.Rotation = 90
-bGrad.Color = ColorSequence.new({
-	ColorSequenceKeypoint.new(0,   Color3.fromRGB(0, 180, 255)),
-	ColorSequenceKeypoint.new(0.5, Color3.fromRGB(30, 30, 55)),
-	ColorSequenceKeypoint.new(1,   Color3.fromRGB(0, 180, 255)),
-})
-
--- animate border gradient slowly
-task.spawn(function()
-	local rot = 90
-	while NF.alive do
-		task.wait(0.04)
-		rot = (rot + 0.4) % 360
-		bGrad.Rotation = rot
-	end
-end)
-
--- Minimize float button
+-- Float button (visible when hidden)
 local floatBtn = Instance.new("TextButton", gui)
-floatBtn.Size = UDim2.new(0, 48, 0, 48)
-floatBtn.Position = UDim2.new(1, -62, 0.5, -215)
-floatBtn.BackgroundColor3 = C.bg
-floatBtn.Text = "🎣"
-floatBtn.TextSize = 20
-floatBtn.BorderSizePixel = 0
-floatBtn.Visible = false
-rnd(floatBtn, 24)
-stroke(floatBtn, C.accent, 1.5)
+floatBtn.Size             = UDim2.new(0, 42, 0, 42)
+floatBtn.Position         = UDim2.new(1, -56, 0.5, -192)
+floatBtn.BackgroundColor3 = C.bg2
+floatBtn.Text             = "NF"
+floatBtn.TextColor3       = C.gold
+floatBtn.Font             = Enum.Font.GothamBold
+floatBtn.TextSize         = 11
+floatBtn.BorderSizePixel  = 0
+floatBtn.Visible          = false
+rnd(floatBtn, 21)
+mkStroke(floatBtn, C.gold, 1)
 
--- ─── Header ───────────────────────────────────────────────
-local header = Instance.new("Frame", main)
-header.Size = UDim2.new(1, 0, 0, 54)
-header.BackgroundColor3 = C.bg2
-header.BorderSizePixel = 0
-rnd(header, 13)
+-- ── Header ───────────────────────────────────────────
+local hdr = Instance.new("Frame", main)
+hdr.Size             = UDim2.new(1, 0, 0, 48)
+hdr.BackgroundColor3 = C.bg2
+hdr.BorderSizePixel  = 0
+rnd(hdr, 11)
 
--- bottom half flat cover
-local hCover = Instance.new("Frame", header)
-hCover.Size = UDim2.new(1, 0, 0.5, 0)
-hCover.Position = UDim2.new(0, 0, 0.5, 0)
-hCover.BackgroundColor3 = C.bg2
-hCover.BorderSizePixel = 0
+-- Cover lower-half corner rounding
+local hdrFlat = Instance.new("Frame", hdr)
+hdrFlat.Size             = UDim2.new(1, 0, 0.5, 0)
+hdrFlat.Position         = UDim2.new(0, 0, 0.5, 0)
+hdrFlat.BackgroundColor3 = C.bg2
+hdrFlat.BorderSizePixel  = 0
 
--- divider
-local hDiv = Instance.new("Frame", header)
-hDiv.Size = UDim2.new(1, 0, 0, 1)
-hDiv.Position = UDim2.new(0, 0, 1, -1)
-hDiv.BackgroundColor3 = C.border
-hDiv.BorderSizePixel = 0
+local hdrDiv = Instance.new("Frame", hdr)
+hdrDiv.Size             = UDim2.new(1, 0, 0, 1)
+hdrDiv.Position         = UDim2.new(0, 0, 1, -1)
+hdrDiv.BackgroundColor3 = C.border
+hdrDiv.BorderSizePixel  = 0
 
--- accent dot
-local dot = Instance.new("Frame", header)
-dot.Size = UDim2.new(0, 6, 0, 6)
-dot.Position = UDim2.new(0, 14, 0, 16)
-dot.BackgroundColor3 = C.accent
-dot.BorderSizePixel = 0
-rnd(dot, 3)
+-- Gold accent mark
+local mark = Instance.new("Frame", hdr)
+mark.Size             = UDim2.new(0, 3, 0, 22)
+mark.Position         = UDim2.new(0, 12, 0.5, -11)
+mark.BackgroundColor3 = C.gold
+mark.BorderSizePixel  = 0
+rnd(mark, 2)
 
-lbl(header, {
-	text  = "Nazhan Fishing",
-	sz    = UDim2.new(0, 190, 0, 22),
-	pos   = UDim2.new(0, 26, 0, 7),
-	font  = Enum.Font.GothamBold,
-	size  = 14,
-	color = C.txt,
-})
-lbl(header, {
-	text  = "Indo Hangout • Auto Fishing System",
-	sz    = UDim2.new(0, 220, 0, 16),
-	pos   = UDim2.new(0, 26, 0, 29),
-	font  = Enum.Font.Gotham,
-	size  = 9.5,
-	color = C.txtDim,
-})
+local titleL = mkLbl(hdr, "Nazhan Fish", 13, Enum.Font.GothamBold, C.txt)
+titleL.Size     = UDim2.new(0, 180, 0, 18)
+titleL.Position = UDim2.new(0, 20, 0, 8)
 
-local hideBtn = btn(header, {
-	text  = "—",
-	sz    = UDim2.new(0, 28, 0, 22),
-	pos   = UDim2.new(1, -38, 0.5, -11),
-	bg    = C.card,
-	tc    = C.txtDim,
-	size  = 14,
-	r     = 6,
-})
+local subL = mkLbl(hdr, "Auto Fishing System", 9, Enum.Font.Gotham, C.muted)
+subL.Size     = UDim2.new(0, 180, 0, 13)
+subL.Position = UDim2.new(0, 20, 0, 27)
 
--- hide / show logic
+local hideBtn = mkBtn(hdr, "—", C.bg, C.muted, 12)
+hideBtn.Size     = UDim2.new(0, 26, 0, 20)
+hideBtn.Position = UDim2.new(1, -34, 0.5, -10)
+
+-- ── Hide / Show ──────────────────────────────────────
 local savedPos = main.Position
-local hidden = false
-local function setHide(h)
-	hidden = h
+local isHid    = false
+
+local function doHide(h)
+	isHid = h
 	if h then
 		savedPos = main.Position
-		TS:Create(main, TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
-			{Position = UDim2.new(1, 50, 0.5, -215)}):Play()
-		task.delay(0.23, function()
-			if hidden then main.Visible=false; floatBtn.Visible=true end
+		TS:Create(main, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
+			{Position = UDim2.new(1, 10, 0.5, -192)}):Play()
+		task.delay(0.21, function()
+			if isHid then main.Visible = false; floatBtn.Visible = true end
 		end)
 	else
 		main.Visible = true; floatBtn.Visible = false
-		TS:Create(main, TweenInfo.new(0.22, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
+		main.Position = UDim2.new(1, 10, 0.5, -192)
+		TS:Create(main, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
 			{Position = savedPos}):Play()
 	end
 end
-hideBtn.MouseButton1Click:Connect(function() setHide(true) end)
-floatBtn.MouseButton1Click:Connect(function() setHide(false) end)
+hideBtn.MouseButton1Click:Connect(function() doHide(true) end)
+floatBtn.MouseButton1Click:Connect(function() doHide(false) end)
 
--- ─── Tab Bar ──────────────────────────────────────────────
+-- ── Tab Bar ─────────────────────────────────────────
 local tabBar = Instance.new("Frame", main)
-tabBar.Size = UDim2.new(1, 0, 0, 34)
-tabBar.Position = UDim2.new(0, 0, 0, 54)
+tabBar.Size             = UDim2.new(1, 0, 0, 28)
+tabBar.Position         = UDim2.new(0, 0, 0, 48)
 tabBar.BackgroundColor3 = C.bg2
-tabBar.BorderSizePixel = 0
+tabBar.BorderSizePixel  = 0
 
 local tDiv = Instance.new("Frame", tabBar)
-tDiv.Size = UDim2.new(1, 0, 0, 1)
-tDiv.Position = UDim2.new(0, 0, 1, -1)
-tDiv.BackgroundColor3 = C.border
-tDiv.BorderSizePixel = 0
+tDiv.Size = UDim2.new(1, 0, 0, 1); tDiv.Position = UDim2.new(0, 0, 1, -1)
+tDiv.BackgroundColor3 = C.border; tDiv.BorderSizePixel = 0
 
--- sliding indicator pill
-local pill = Instance.new("Frame", tabBar)
-pill.Size = UDim2.new(0.25, -8, 0, 2)
-pill.Position = UDim2.new(0, 4, 1, -2)
-pill.BackgroundColor3 = C.accent
-pill.BorderSizePixel = 0
-rnd(pill, 2)
-
-local TABS    = { "Fishing", "Teleport", "Settings", "Webhook" }
+local TABS    = { "Mancing", "Spot", "Seting", "Notif", "Log" }
 local tabBtns = {}
 local panels  = {}
+local numTabs = #TABS
+
+-- pill indicator
+local pill = Instance.new("Frame", tabBar)
+pill.Size             = UDim2.new(1/numTabs, -6, 0, 2)
+pill.Position         = UDim2.new(0, 3, 1, -2)
+pill.BackgroundColor3 = C.gold
+pill.BorderSizePixel  = 0
+rnd(pill, 1)
 
 local body = Instance.new("Frame", main)
-body.Size = UDim2.new(1, 0, 1, -88)
-body.Position = UDim2.new(0, 0, 0, 88)
+body.Size             = UDim2.new(1, 0, 1, -76)
+body.Position         = UDim2.new(0, 0, 0, 76)
 body.BackgroundTransparency = 1
 body.ClipsDescendants = true
 
-for i, name in ipairs(TABS) do
+for i, tname in ipairs(TABS) do
 	local tb = Instance.new("TextButton", tabBar)
-	tb.Size = UDim2.new(0.25, 0, 1, -2)
-	tb.Position = UDim2.new((i-1)*0.25, 0, 0, 0)
+	tb.Size             = UDim2.new(1/numTabs, 0, 1, -2)
+	tb.Position         = UDim2.new((i-1)/numTabs, 0, 0, 0)
 	tb.BackgroundTransparency = 1
-	tb.BorderSizePixel = 0
-	tb.Text = name
-	tb.TextColor3 = (i==1) and C.txt or C.txtMuted
-	tb.Font = Enum.Font.GothamMedium
-	tb.TextSize = 10
-	tabBtns[name] = tb
+	tb.BorderSizePixel  = 0
+	tb.Text             = tname
+	tb.TextColor3       = (i==1) and C.txt or C.muted
+	tb.Font             = Enum.Font.GothamMedium
+	tb.TextSize         = 9
+	tabBtns[tname]      = tb
 
 	local p = Instance.new("Frame", body)
-	p.Size = UDim2.new(1, 0, 1, 0)
+	p.Size              = UDim2.new(1, 0, 1, 0)
 	p.BackgroundTransparency = 1
-	p.Visible = (i==1)
-	panels[name] = p
+	p.Visible           = (i==1)
+	panels[tname]       = p
 end
 
-local activeTab = "Fishing"
+local activeTab = "Mancing"
 local function switchTab(name)
 	if activeTab == name then return end
 	activeTab = name
 	local idx = table.find(TABS, name)
-	TS:Create(pill, TweenInfo.new(0.18, Enum.EasingStyle.Quad),
-		{Position = UDim2.new((idx-1)*0.25, 4, 1, -2)}):Play()
+	TS:Create(pill, TweenInfo.new(0.15, Enum.EasingStyle.Quad),
+		{Position = UDim2.new((idx-1)/numTabs, 3, 1, -2)}):Play()
 	for n, tb in pairs(tabBtns) do
-		tb.TextColor3 = (n==name) and C.txt or C.txtMuted
+		tb.TextColor3    = (n==name) and C.txt or C.muted
 		panels[n].Visible = (n==name)
 	end
 end
@@ -505,628 +451,702 @@ for name, tb in pairs(tabBtns) do
 	tb.MouseButton1Click:Connect(function() switchTab(name) end)
 end
 
--- ═══════════════════════════════════════════════════════════
--- TAB 1: FISHING
--- ═══════════════════════════════════════════════════════════
-local pF = panels["Fishing"]
+-- ════════════════════════════════════════════════════
+-- TAB 1 — MANCING
+-- ════════════════════════════════════════════════════
+local pM = panels["Mancing"]
 
--- ── Status Card ──
-local stCard = Instance.new("Frame", pF)
-stCard.Size = UDim2.new(1, -24, 0, 64)
-stCard.Position = UDim2.new(0, 12, 0, 10)
+-- Status card
+local stCard = Instance.new("Frame", pM)
+stCard.Size             = UDim2.new(1, -20, 0, 60)
+stCard.Position         = UDim2.new(0, 10, 0, 10)
 stCard.BackgroundColor3 = C.card
-stCard.BorderSizePixel = 0
-rnd(stCard, 8)
-stroke(stCard)
+stCard.BorderSizePixel  = 0
+rnd(stCard, 7)
+mkStroke(stCard, C.border)
 
--- live indicator dot
-local liveDot = Instance.new("Frame", stCard)
-liveDot.Size = UDim2.new(0, 7, 0, 7)
-liveDot.Position = UDim2.new(0, 11, 0, 12)
-liveDot.BackgroundColor3 = C.txtMuted
-liveDot.BorderSizePixel = 0
-rnd(liveDot, 4)
+-- State indicator dot
+local stateDot = Instance.new("Frame", stCard)
+stateDot.Size             = UDim2.new(0, 6, 0, 6)
+stateDot.Position         = UDim2.new(0, 10, 0, 11)
+stateDot.BackgroundColor3 = C.muted
+stateDot.BorderSizePixel  = 0
+rnd(stateDot, 3)
 
-local statusLbl = lbl(stCard, {
-	text  = "Idle",
-	sz    = UDim2.new(1, -30, 0, 18),
-	pos   = UDim2.new(0, 23, 0, 6),
-	font  = Enum.Font.GothamBold,
-	size  = 12,
-	color = C.txt,
-})
+local stateL = mkLbl(stCard, "Idle", 11, Enum.Font.GothamBold, C.txt)
+stateL.Size     = UDim2.new(1, -24, 0, 16)
+stateL.Position = UDim2.new(0, 20, 0, 5)
 
-local caughtLbl = lbl(stCard, {
-	text  = "Tangkapan: 0 ikan",
-	sz    = UDim2.new(1, -20, 0, 15),
-	pos   = UDim2.new(0, 11, 0, 26),
-	size  = 10,
-	color = C.txtDim,
-})
+local fishCountL = mkLbl(stCard, "Tangkapan: 0 ikan", 9.5, Enum.Font.Gotham, C.dim)
+fishCountL.Size     = UDim2.new(1, -16, 0, 14)
+fishCountL.Position = UDim2.new(0, 10, 0, 24)
 
-local rateLbl = lbl(stCard, {
-	text  = "Rate: — ikan/jam  •  Sesi: 00:00:00",
-	sz    = UDim2.new(1, -20, 0, 15),
-	pos   = UDim2.new(0, 11, 0, 44),
-	size  = 9.5,
-	color = C.txtMuted,
-})
+local rateL = mkLbl(stCard, "Rate  —  |  Sesi  00:00:00", 9, Enum.Font.Gotham, C.muted)
+rateL.Size     = UDim2.new(1, -16, 0, 13)
+rateL.Position = UDim2.new(0, 10, 0, 40)
 
--- Live dot pulse animation
-local dotPulse = TS:Create(liveDot, TweenInfo.new(0.7, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
-	{BackgroundColor3 = Color3.new(1,1,1)})
-
-local function setDot(color)
-	dotPulse:Cancel()
-	liveDot.BackgroundColor3 = color
-	dotPulse = TS:Create(liveDot, TweenInfo.new(0.7, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
-		{BackgroundColor3 = color:Lerp(Color3.new(1,1,1), 0.5)})
+-- Dot pulse animation
+local dotPulse
+local function setDot(col)
+	if dotPulse then dotPulse:Cancel() end
+	stateDot.BackgroundColor3 = col
+	dotPulse = TS:Create(stateDot,
+		TweenInfo.new(0.65, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
+		{BackgroundColor3 = col:Lerp(Color3.new(1,1,1), 0.55)})
 	dotPulse:Play()
 end
-setDot(C.txtMuted)
+setDot(C.muted)
 
--- ── Phase Progress Bar ──
-local phBar = Instance.new("Frame", pF)
-phBar.Size = UDim2.new(1, -24, 0, 38)
-phBar.Position = UDim2.new(0, 12, 0, 82)
-phBar.BackgroundTransparency = 1
+-- Phase progress bar
+local phCont = Instance.new("Frame", pM)
+phCont.Size             = UDim2.new(1, -20, 0, 30)
+phCont.Position         = UDim2.new(0, 10, 0, 76)
+phCont.BackgroundTransparency = 1
 
-local barBg = Instance.new("Frame", phBar)
-barBg.Size = UDim2.new(1, 0, 0, 3)
-barBg.Position = UDim2.new(0, 0, 0, 6)
+local barBg = Instance.new("Frame", phCont)
+barBg.Size             = UDim2.new(1, 0, 0, 2)
+barBg.Position         = UDim2.new(0, 0, 0, 5)
 barBg.BackgroundColor3 = C.border
-barBg.BorderSizePixel = 0
-rnd(barBg, 2)
+barBg.BorderSizePixel  = 0
+rnd(barBg, 1)
 
 local barFill = Instance.new("Frame", barBg)
-barFill.Size = UDim2.new(0, 0, 1, 0)
-barFill.BackgroundColor3 = C.accent
-barFill.BorderSizePixel = 0
-rnd(barFill, 2)
+barFill.Size             = UDim2.new(0, 0, 1, 0)
+barFill.BackgroundColor3 = C.gold
+barFill.BorderSizePixel  = 0
+rnd(barFill, 1)
 
-local phNames  = {"Cast","Wait","Game","Done"}
-local phColors = {C.accent, C.orange, C.red, C.green}
+local phNames  = { "Cast", "Wait", "Game", "Done" }
+local phColors = { C.gold, C.amber, C.rust, C.sage }
 local phLbls   = {}
 for i, pn in ipairs(phNames) do
-	local pl = lbl(phBar, {
-		text  = pn,
-		sz    = UDim2.new(0.25, 0, 0, 16),
-		pos   = UDim2.new((i-1)*0.25, 0, 0, 14),
-		size  = 9.5,
-		color = C.txtMuted,
-		font  = Enum.Font.GothamBold,
-		xa    = Enum.TextXAlignment.Center,
-	})
-	pl.TextXAlignment = Enum.TextXAlignment.Center
-	phLbls[i] = pl
+	local pl = Instance.new("TextLabel", phCont)
+	pl.BackgroundTransparency = 1
+	pl.Size     = UDim2.new(0.25, 0, 0, 14)
+	pl.Position = UDim2.new((i-1)*0.25, 0, 0, 12)
+	pl.Text     = pn
+	pl.TextColor3 = C.muted
+	pl.Font     = Enum.Font.GothamBold
+	pl.TextSize = 9
+	phLbls[i]   = pl
 end
 
 local activePh = 0
 local function setPhase(ph)
 	activePh = ph
-	for i=1,4 do
-		if i < ph then        phLbls[i].TextColor3 = C.txtDim
+	for i = 1, 4 do
+		if i < ph then        phLbls[i].TextColor3 = C.dim
 		elseif i == ph then   phLbls[i].TextColor3 = phColors[i]
-		else                  phLbls[i].TextColor3 = C.txtMuted end
+		else                  phLbls[i].TextColor3 = C.muted end
 	end
 	if ph == 0 then
-		TS:Create(barFill, TweenInfo.new(0.14), {Size=UDim2.new(0,0,1,0), BackgroundColor3=C.accent}):Play()
+		TS:Create(barFill, TweenInfo.new(0.12),
+			{Size = UDim2.new(0,0,1,0), BackgroundColor3 = C.gold}):Play()
 	else
-		TS:Create(barFill, TweenInfo.new(0.14), {
-			Size=UDim2.new(math.clamp(ph*0.25,0,1),0,1,0),
-			BackgroundColor3=phColors[ph],
+		TS:Create(barFill, TweenInfo.new(0.12), {
+			Size             = UDim2.new(math.clamp(ph*0.25,0,1),0,1,0),
+			BackgroundColor3 = phColors[ph],
 		}):Play()
 	end
 end
 
 local function setPct(f)
-	if activePh<=0 then return end
-	barFill.Size = UDim2.new(math.clamp((activePh-1)*0.25 + f*0.25,0,1),0,1,0)
+	if activePh <= 0 then return end
+	barFill.Size = UDim2.new(math.clamp((activePh-1)*0.25 + f*0.25, 0, 1), 0, 1, 0)
 end
 
-sep(pF, 127)
+mkSep(pM, 112)
 
--- ── Rod Selector ──
-local rodCard = Instance.new("Frame", pF)
-rodCard.Size = UDim2.new(1, -24, 0, 48)
-rodCard.Position = UDim2.new(0, 12, 0, 134)
+-- Rod selector
+local rodCard = Instance.new("Frame", pM)
+rodCard.Size             = UDim2.new(1, -20, 0, 42)
+rodCard.Position         = UDim2.new(0, 10, 0, 118)
 rodCard.BackgroundColor3 = C.card
-rodCard.BorderSizePixel = 0
-rnd(rodCard, 8)
-stroke(rodCard)
+rodCard.BorderSizePixel  = 0
+rnd(rodCard, 7)
+mkStroke(rodCard, C.border)
 
-lbl(rodCard, {
-	text  = "Rod Selection",
-	sz    = UDim2.new(0, 140, 0, 16),
-	pos   = UDim2.new(0, 10, 0, 4),
-	size  = 9,
-	color = C.txtMuted,
-	font  = Enum.Font.GothamBold,
-})
+local rodHdrL = mkLbl(rodCard, "ROD", 8, Enum.Font.GothamBold, C.muted)
+rodHdrL.Size     = UDim2.new(0, 40, 0, 12)
+rodHdrL.Position = UDim2.new(0, 10, 0, 5)
 
-local prevB = btn(rodCard, {
-	text = "‹", sz = UDim2.new(0,22,0,20), pos = UDim2.new(0,8,0,22),
-	bg=C.bg, tc=C.txtDim, size=13, r=5, bColor=C.border,
-})
-local nextB = btn(rodCard, {
-	text = "›", sz = UDim2.new(0,22,0,20), pos = UDim2.new(1,-30,0,22),
-	bg=C.bg, tc=C.txtDim, size=13, r=5, bColor=C.border,
-})
-local rodName = lbl(rodCard, {
-	text  = RODS[1].n,
-	sz    = UDim2.new(1,-64,0,20),
-	pos   = UDim2.new(0,34,0,22),
-	size  = 11,
-	color = C.accent,
-	font  = Enum.Font.GothamBold,
-	xa    = Enum.TextXAlignment.Center,
-})
-rodName.TextXAlignment = Enum.TextXAlignment.Center
+local prevB = mkBtn(rodCard, "<", C.bg, C.dim, 10)
+prevB.Size     = UDim2.new(0, 20, 0, 18)
+prevB.Position = UDim2.new(0, 8, 0, 19)
 
-local rodStat = lbl(rodCard, {
-	text  = "",
-	sz    = UDim2.new(1,-16,0,12),
-	pos   = UDim2.new(0,8,0,36),
-	size  = 8.5,
-	color = C.txtMuted,
-	xa    = Enum.TextXAlignment.Center,
-})
-rodStat.TextXAlignment = Enum.TextXAlignment.Center
-rodStat.Visible = false  -- shown below the card
+local nextB = mkBtn(rodCard, ">", C.bg, C.dim, 10)
+nextB.Size     = UDim2.new(0, 20, 0, 18)
+nextB.Position = UDim2.new(1, -28, 0, 19)
 
--- updated: show stat in the card itself bottom row
-rodStat.Size = UDim2.new(1,-64,0,12)
-rodStat.Position = UDim2.new(0,34,0,36)
-rodStat.Visible = true
+local rodNameL = Instance.new("TextLabel", rodCard)
+rodNameL.BackgroundTransparency = 1
+rodNameL.Size     = UDim2.new(1, -64, 0, 18)
+rodNameL.Position = UDim2.new(0, 32, 0, 19)
+rodNameL.Text     = RODS[1].n
+rodNameL.TextColor3 = C.gold
+rodNameL.Font     = Enum.Font.GothamBold
+rodNameL.TextSize = 10
+rodNameL.TextXAlignment = Enum.TextXAlignment.Center
+
+local rodStatL = mkLbl(rodCard, "", 8, Enum.Font.Gotham, C.muted)
+rodStatL.Size     = UDim2.new(1, -16, 0, 12)
+rodStatL.Position = UDim2.new(0, 8, 0, 5)
+rodStatL.TextXAlignment = Enum.TextXAlignment.Right
 
 local function updateRod()
 	local r = RODS[rodIdx]
-	rodName.Text = r.n
-	rodStat.Text = string.format("Lure %.0f%%  |  Prog %.0f%%", r.lure*100, r.prog*100)
+	rodNameL.Text = r.n
+	rodStatL.Text = string.format("lure %.0f%%  prog %.0f%%", r.lure*100, r.prog*100)
 end
 updateRod()
 prevB.MouseButton1Click:Connect(function()
-	rodIdx = (rodIdx<=1) and #RODS or rodIdx-1; updateRod()
+	rodIdx = (rodIdx <= 1) and #RODS or rodIdx - 1; updateRod()
 end)
 nextB.MouseButton1Click:Connect(function()
-	rodIdx = (rodIdx>=#RODS) and 1 or rodIdx+1; updateRod()
+	rodIdx = (rodIdx >= #RODS) and 1 or rodIdx + 1; updateRod()
 end)
 
-sep(pF, 190)
+mkSep(pM, 167)
 
--- ── Main Toggle ──
-mkToggle(pF, 196, "Auto Fishing Aktif", false, function(on)
+-- Main toggle
+local doReset   -- forward declare
+local mainToggle= mkToggle(pM, 173, "Auto Fishing", false, function(on)
 	active = on
 	if on then
-		fishState="IDLE"; idleAt=os.clock()
-		setDot(C.green)
-		setPhase(0)
-		statusLbl.Text = "Starting..."
+		fishState = "IDLE"; idleAt = os.clock()
+		setDot(C.sage); setPhase(0); stateL.Text = "Memulai..."
 	else
-		active = false
-		isSpace = false
+		active = false; isSpace = false
 		pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.Space, false, game) end)
-		setDot(C.txtMuted)
-		setPhase(0)
-		statusLbl.Text = "Idle"
-		sendWebhook("⏹ Fishing Dihentikan",
-			"Sistem auto-fishing dimatikan secara manual.", 0x888888)
+		setDot(C.muted); setPhase(0); stateL.Text = "Idle"
+		sendWebhook("Fishing Dihentikan", "Sistem auto-fishing dimatikan secara manual.", 0x888888)
 	end
 end)
 
--- ── Reset Button ──
-local rstBtn = btn(pF, {
-	text  = "Reset Session",
-	sz    = UDim2.new(1,-24,0,28),
-	pos   = UDim2.new(0,12,0,232),
-	bg    = Color3.fromRGB(28, 20, 24),
-	tc    = Color3.fromRGB(220, 80, 100),
-	size  = 10.5,
-	r     = 7,
-	bColor= Color3.fromRGB(60, 30, 40),
-})
-
--- fishState reset function — declared here but defined later
-local doReset
+-- Reset button
+local rstBtn = mkBtn(pM, "Reset", Color3.fromRGB(32, 22, 21), C.rust, 10)
+rstBtn.Size     = UDim2.new(1, -20, 0, 24)
+rstBtn.Position = UDim2.new(0, 10, 0, 208)
+mkStroke(rstBtn, Color3.fromRGB(58, 34, 32))
 
 rstBtn.MouseButton1Click:Connect(function()
 	if doReset then doReset("manual") end
 end)
 
+mkSep(pM, 240)
+
+-- Session stats row (kecil di bawah)
+local sessRateL = mkLbl(pM, "Rate  —  ikan/jam", 8.5, Enum.Font.Gotham, C.muted)
+sessRateL.Size     = UDim2.new(0.5, -14, 0, 12)
+sessRateL.Position = UDim2.new(0, 10, 0, 248)
+
+local sessTimeL = mkLbl(pM, "00:00:00", 8.5, Enum.Font.Gotham, C.muted)
+sessTimeL.Size             = UDim2.new(0.5, -6, 0, 12)
+sessTimeL.Position         = UDim2.new(0.5, 4, 0, 248)
+sessTimeL.TextXAlignment   = Enum.TextXAlignment.Right
+
+-- Network lag hint
+local lagL = mkLbl(pM, "Jaringan: normal", 8, Enum.Font.Gotham, C.muted)
+lagL.Size     = UDim2.new(1, -20, 0, 12)
+lagL.Position = UDim2.new(0, 10, 0, 264)
+
 -- Session timer thread
 task.spawn(function()
-	while NF.alive do
+	while _S.alive do
 		task.wait(1)
-		local el = os.clock() - sessionStart
-		local h  = math.floor(el/3600)
-		local m  = math.floor(el%3600/60)
-		local s  = math.floor(el%60)
-		local rate = fishCount > 0 and (fishCount / math.max(el/3600, 0.01)) or 0
-		rateLbl.Text = string.format(
-			"Rate: %.1f ikan/jam  •  Sesi: %02d:%02d:%02d",
-			rate, h, m, s
-		)
+		local el = os.clock() - sessStart
+		local h, m, s = math.floor(el/3600), math.floor(el%3600/60), math.floor(el%60)
+		local rate = fishCount > 0 and fishCount / math.max(el/3600, 0.01) or 0
+		sessRateL.Text = string.format("Rate  %.1f ikan/jam", rate)
+		sessTimeL.Text = string.format("%02d:%02d:%02d", h, m, s)
+		rateL.Text     = string.format("Rate %.1f/jam  |  Sesi %02d:%02d:%02d", rate, h, m, s)
+		-- lag indicator update
+		if lagAvg > 0.10 then
+			lagL.Text = "Jaringan: sangat lambat — toleransi diperlebar"
+			lagL.TextColor3 = C.rust
+		elseif lagAvg > 0.05 then
+			lagL.Text = "Jaringan: sedikit lag — sistem beradaptasi"
+			lagL.TextColor3 = C.amber
+		else
+			lagL.Text = "Jaringan: normal"
+			lagL.TextColor3 = C.muted
+		end
 	end
 end)
 
--- ═══════════════════════════════════════════════════════════
--- TAB 2: TELEPORT
--- ═══════════════════════════════════════════════════════════
-local pT = panels["Teleport"]
+-- ════════════════════════════════════════════════════
+-- TAB 2 — SPOT (Custom Locations)
+-- ════════════════════════════════════════════════════
+local pT = panels["Spot"]
 
-lbl(pT, {
-	text  = "SPOT TERSEMBUNYI",
-	sz    = UDim2.new(1,-24,0,16),
-	pos   = UDim2.new(0,12,0,8),
-	size  = 9,
-	color = C.txtMuted,
-	font  = Enum.Font.GothamBold,
-})
+-- Info label
+local spHdrL = mkLbl(pT, "LOKASI TERSIMPAN", 8, Enum.Font.GothamBold, C.muted)
+spHdrL.Size     = UDim2.new(0, 160, 0, 12)
+spHdrL.Position = UDim2.new(0, 10, 0, 10)
 
--- Generate platform to stand on (prevents sinking)
-local function spawnPlatform(pos)
+local spCountL = mkLbl(pT, "0 / 10", 8, Enum.Font.Gotham, C.muted)
+spCountL.Size              = UDim2.new(1, -20, 0, 12)
+spCountL.Position          = UDim2.new(0, 10, 0, 10)
+spCountL.TextXAlignment    = Enum.TextXAlignment.Right
+
+mkSep(pT, 26)
+
+-- Name input row
+local nameBox = Instance.new("TextBox", pT)
+nameBox.Size              = UDim2.new(1, -84, 0, 24)
+nameBox.Position          = UDim2.new(0, 10, 0, 32)
+nameBox.BackgroundColor3  = C.card
+nameBox.TextColor3        = C.txt
+nameBox.PlaceholderText   = "Nama lokasi..."
+nameBox.PlaceholderColor3 = C.muted
+nameBox.Text              = ""
+nameBox.ClearTextOnFocus  = false
+nameBox.Font              = Enum.Font.Gotham
+nameBox.TextSize          = 10
+nameBox.TextXAlignment    = Enum.TextXAlignment.Left
+nameBox.BorderSizePixel   = 0
+rnd(nameBox, 5)
+mkStroke(nameBox, C.border)
+
+-- Padding inside textbox
+local nbPad = Instance.new("UIPadding", nameBox)
+nbPad.PaddingLeft = UDim.new(0, 8)
+
+local saveSpotBtn = mkBtn(pT, "Simpan", C.gold, Color3.fromRGB(20,18,14), 10)
+saveSpotBtn.Size     = UDim2.new(0, 62, 0, 24)
+saveSpotBtn.Position = UDim2.new(1, -72, 0, 32)
+saveSpotBtn.TextColor3 = Color3.fromRGB(20, 18, 14)
+
+mkSep(pT, 62)
+
+-- Scrollable spot list
+local spSF = Instance.new("ScrollingFrame", pT)
+spSF.Size                  = UDim2.new(1, 0, 1, -68)
+spSF.Position              = UDim2.new(0, 0, 0, 68)
+spSF.BackgroundTransparency = 1
+spSF.BorderSizePixel       = 0
+spSF.CanvasSize            = UDim2.new(0, 0, 0, 0)
+spSF.ScrollBarThickness    = 2
+spSF.ScrollBarImageColor3  = C.border
+spSF.AutomaticCanvasSize   = Enum.AutomaticSize.Y
+
+local spList = Instance.new("UIListLayout", spSF)
+spList.SortOrder  = Enum.SortOrder.LayoutOrder
+spList.Padding    = UDim.new(0, 4)
+
+local spPad = Instance.new("UIPadding", spSF)
+spPad.PaddingTop    = UDim.new(0, 6)
+spPad.PaddingLeft   = UDim.new(0, 10)
+spPad.PaddingRight  = UDim.new(0, 10)
+spPad.PaddingBottom = UDim.new(0, 6)
+
+-- Platform spawner for teleport
+local function spawnPlat(pos)
 	pcall(function()
-		local old = workspace:FindFirstChild("__nzh_plat")
+		local old = workspace:FindFirstChild("_nzh_p")
 		if old then old:Destroy() end
+		local p = Instance.new("Part")
+		p.Name = "_nzh_p"; p.Anchored = true; p.CanCollide = true
+		p.Size = Vector3.new(14, 1, 14)
+		p.Position = pos - Vector3.new(0, 3.2, 0)
+		p.Material = Enum.Material.SmoothPlastic
+		p.Transparency = 0.7
+		p.Color = Color3.fromRGB(100, 80, 40)
+		p.Parent = workspace
 	end)
-	local plat = Instance.new("Part")
-	plat.Name = "__nzh_plat"
-	plat.Anchored = true
-	plat.CanCollide = true
-	plat.Size = Vector3.new(16, 1, 16)
-	plat.Position = pos - Vector3.new(0, 3.5, 0)
-	plat.Material = Enum.Material.SmoothPlastic
-	plat.Color = Color3.fromRGB(20, 60, 100)
-	plat.Transparency = 0.65
-	plat.Parent = workspace
-	return plat
 end
 
 local function doTeleport(pos)
-	local char = me.Character
-	local root = char and char:FindFirstChild("HumanoidRootPart")
+	local ch   = me.Character
+	local root = ch and ch:FindFirstChild("HumanoidRootPart")
 	if not root then return end
-	spawnPlatform(pos)
+	spawnPlat(pos)
 	task.wait(0.08)
 	root.CFrame = CFrame.new(pos)
 end
 
-local tSF = Instance.new("ScrollingFrame", pT)
-tSF.Size = UDim2.new(1, 0, 1, -30)
-tSF.Position = UDim2.new(0, 0, 0, 28)
-tSF.BackgroundTransparency = 1
-tSF.BorderSizePixel = 0
-tSF.CanvasSize = UDim2.new(0, 0, 0, #SPOTS * 44 + 12)
-tSF.ScrollBarThickness = 3
-tSF.ScrollBarImageColor3 = C.border
+local renderSpots  -- forward declare
 
-for idx, spot in ipairs(SPOTS) do
-	local row = Instance.new("Frame", tSF)
-	row.Size = UDim2.new(1, -24, 0, 36)
-	row.Position = UDim2.new(0, 12, 0, (idx-1)*42 + 6)
-	row.BackgroundColor3 = C.card
-	row.BorderSizePixel = 0
-	rnd(row, 7)
-	stroke(row)
+renderSpots = function()
+	-- clear existing rows
+	for _, ch in ipairs(spSF:GetChildren()) do
+		if ch:IsA("Frame") then ch:Destroy() end
+	end
 
-	lbl(row, {
-		text  = spot.label,
-		sz    = UDim2.new(0.65, 0, 1, 0),
-		pos   = UDim2.new(0, 10, 0, 0),
-		size  = 10.5,
-		color = C.txtDim,
-		font  = Enum.Font.GothamMedium,
-	})
+	spCountL.Text = string.format("%d / %d", #spots, MAX_SPOTS)
 
-	local tpBtn = btn(row, {
-		text  = "Teleport",
-		sz    = UDim2.new(0.3, -4, 0, 24),
-		pos   = UDim2.new(0.7, 0, 0.5, -12),
-		bg    = C.accent,
-		tc    = Color3.new(1,1,1),
-		size  = 9.5,
-		r     = 6,
-		border= false,
-	})
+	if #spots == 0 then
+		local none = Instance.new("TextLabel", spSF)
+		none.LayoutOrder  = 0
+		none.BackgroundTransparency = 1
+		none.Size         = UDim2.new(1, 0, 0, 36)
+		none.Text         = "Belum ada lokasi tersimpan."
+		none.TextColor3   = C.muted
+		none.Font         = Enum.Font.Gotham
+		none.TextSize     = 9.5
+		none.TextXAlignment = Enum.TextXAlignment.Center
+		return
+	end
 
-	local capturedPos = spot.pos
-	tpBtn.MouseButton1Click:Connect(function()
-		doTeleport(capturedPos)
-		statusLbl.Text = "Pindah ke " .. spot.label:gsub("^%S+%s*", "")
-	end)
+	for i, sp in ipairs(spots) do
+		local row = Instance.new("Frame", spSF)
+		row.LayoutOrder       = i
+		row.Size              = UDim2.new(1, 0, 0, 32)
+		row.BackgroundColor3  = C.card
+		row.BorderSizePixel   = 0
+		rnd(row, 5)
+		mkStroke(row, C.border)
+
+		local nameLbl = mkLbl(row, sp.name, 10, Enum.Font.GothamMedium, C.txt)
+		nameLbl.Size     = UDim2.new(1, -110, 1, 0)
+		nameLbl.Position = UDim2.new(0, 10, 0, 0)
+
+		local coordLbl = mkLbl(row, string.format("%.0f, %.0f, %.0f", sp.x, sp.y, sp.z), 7.5, Enum.Font.Gotham, C.muted)
+		coordLbl.Size     = UDim2.new(1, -110, 0, 10)
+		coordLbl.Position = UDim2.new(0, 10, 1, -12)
+
+		local goBtn = mkBtn(row, "Pergi", C.gold, Color3.fromRGB(18,16,12), 9)
+		goBtn.Size     = UDim2.new(0, 46, 0, 20)
+		goBtn.Position = UDim2.new(1, -100, 0.5, -10)
+
+		local delBtn = mkBtn(row, "Hapus", Color3.fromRGB(36,24,24), C.rust, 9)
+		delBtn.Size     = UDim2.new(0, 44, 0, 20)
+		delBtn.Position = UDim2.new(1, -50, 0.5, -10)
+
+		-- capture i for closures
+		local capturedIdx = i
+		local capturedPos = Vector3.new(sp.x, sp.y, sp.z)
+
+		goBtn.MouseButton1Click:Connect(function()
+			doTeleport(capturedPos)
+			stateL.Text = "Pindah ke " .. sp.name
+		end)
+
+		delBtn.MouseButton1Click:Connect(function()
+			table.remove(spots, capturedIdx)
+			saveSpots()
+			renderSpots()
+		end)
+	end
 end
 
--- ═══════════════════════════════════════════════════════════
--- TAB 3: SETTINGS
--- ═══════════════════════════════════════════════════════════
-local pS = panels["Settings"]
+renderSpots()
 
-local sSF = Instance.new("ScrollingFrame", pS)
-sSF.Size = UDim2.new(1, 0, 1, 0)
-sSF.BackgroundTransparency = 1
-sSF.BorderSizePixel = 0
-sSF.CanvasSize = UDim2.new(0, 0, 0, 320)
-sSF.ScrollBarThickness = 3
-sSF.ScrollBarImageColor3 = C.border
-
-lbl(sSF, {
-	text  = "ANTI-DETEKSI",
-	sz    = UDim2.new(1,-24,0,14),
-	pos   = UDim2.new(0,12,0,8),
-	size  = 9, color = C.txtMuted, font = Enum.Font.GothamBold,
-})
-sep(sSF, 24)
-
-local sY = 30
-mkToggle(sSF, sY, "Jitter Timing Cast", CFG.jitter, function(v) CFG.jitter=v end)
-sY = sY+33
-mkToggle(sSF, sY, "Jitter Posisi Kursor", CFG.coordJitter, function(v) CFG.coordJitter=v end)
-sY = sY+33
-mkToggle(sSF, sY, "Anti-AFK Mouse Sweep", CFG.antiAFK, function(v) CFG.antiAFK=v end)
-sY = sY+33
-sep(sSF, sY+3); sY=sY+12
-
-lbl(sSF, {
-	text  = "ISTIRAHAT OTOMATIS",
-	sz    = UDim2.new(1,-24,0,14),
-	pos   = UDim2.new(0,12,0,sY),
-	size  = 9, color = C.txtMuted, font = Enum.Font.GothamBold,
-})
-sY=sY+18
-sep(sSF, sY); sY=sY+8
-mkToggle(sSF, sY, "Aktifkan Fatigue Break", CFG.fatigueOn, function(v) CFG.fatigueOn=v end)
-sY=sY+33
-sep(sSF, sY+3); sY=sY+12
-
-lbl(sSF, {
-	text  = "KEAMANAN",
-	sz    = UDim2.new(1,-24,0,14),
-	pos   = UDim2.new(0,12,0,sY),
-	size  = 9, color = C.txtMuted, font = Enum.Font.GothamBold,
-})
-sY=sY+18
-sep(sSF, sY); sY=sY+8
-mkToggle(sSF, sY, "Admin Guard (Auto-Kick)", CFG.adminGuard, function(v) CFG.adminGuard=v end)
-sY=sY+33
-mkToggle(sSF, sY, "Watchdog Auto-Reset", CFG.watchdog, function(v) CFG.watchdog=v end)
-
-sSF.CanvasSize = UDim2.new(0, 0, 0, sY+50)
-
--- ═══════════════════════════════════════════════════════════
--- TAB 4: WEBHOOK & LOG
--- ═══════════════════════════════════════════════════════════
-local pW = panels["Webhook"]
-
--- Webhook input card
-local whCard = Instance.new("Frame", pW)
-whCard.Size = UDim2.new(1,-24,0,96)
-whCard.Position = UDim2.new(0,12,0,10)
-whCard.BackgroundColor3 = C.card
-whCard.BorderSizePixel = 0
-rnd(whCard, 8)
-stroke(whCard)
-
-lbl(whCard, {
-	text  = "🔔  DISCORD WEBHOOK",
-	sz    = UDim2.new(1,-14,0,14),
-	pos   = UDim2.new(0,10,0,6),
-	size  = 9.5, color = C.txtMuted, font = Enum.Font.GothamBold,
-})
-
-local whBox = Instance.new("TextBox", whCard)
-whBox.Size = UDim2.new(1,-20,0,22)
-whBox.Position = UDim2.new(0,10,0,22)
-whBox.BackgroundColor3 = C.bg
-whBox.TextColor3 = C.txt
-whBox.PlaceholderText = "Paste link webhook Discord kamu..."
-whBox.PlaceholderColor3 = C.txtMuted
-whBox.Text = webhookURL
-whBox.ClearTextOnFocus = false
-whBox.Font = Enum.Font.Code
-whBox.TextSize = 9.5
-whBox.TextXAlignment = Enum.TextXAlignment.Left
-whBox.BorderSizePixel = 0
-rnd(whBox, 5)
-stroke(whBox)
-
-whBox.FocusLost:Connect(function()
-	webhookURL = whBox.Text
+-- Save current position
+saveSpotBtn.MouseButton1Click:Connect(function()
+	local name = nameBox.Text:match("^%s*(.-)%s*$")  -- trim
+	if name == "" then name = "Spot " .. (#spots + 1) end
+	if #spots >= MAX_SPOTS then
+		stateL.Text = "Maksimal " .. MAX_SPOTS .. " spot"
+		return
+	end
+	local ch   = me.Character
+	local root = ch and ch:FindFirstChild("HumanoidRootPart")
+	if not root then return end
+	local p = root.Position
+	table.insert(spots, { name=name, x=p.X, y=p.Y, z=p.Z })
+	saveSpots()
+	nameBox.Text = ""
+	renderSpots()
 end)
 
--- Enable / Disable webhook
-local whToggleRow, _ = mkToggle(whCard, 48, "Kirim Notifikasi Discord", false, function(v)
+-- ════════════════════════════════════════════════════
+-- TAB 3 — SETING
+-- ════════════════════════════════════════════════════
+local pS = panels["Seting"]
+
+local sScroll = Instance.new("ScrollingFrame", pS)
+sScroll.Size               = UDim2.new(1, 0, 1, 0)
+sScroll.BackgroundTransparency = 1
+sScroll.BorderSizePixel    = 0
+sScroll.CanvasSize         = UDim2.new(0, 0, 0, 400)
+sScroll.ScrollBarThickness = 2
+sScroll.ScrollBarImageColor3 = C.border
+
+local function sSection(lbl, y)
+	local l = mkLbl(sScroll, lbl, 8, Enum.Font.GothamBold, C.muted)
+	l.Size = UDim2.new(1, -24, 0, 12)
+	l.Position = UDim2.new(0, 12, 0, y)
+	mkSep(sScroll, y + 14)
+	return l
+end
+
+local sy = 10
+sSection("PEMANCIAN", sy)
+sy = sy + 20
+mkToggle(sScroll, sy, "Jitter Timing Cast",    CFG.jitter,      function(v) CFG.jitter=v end); sy=sy+32
+mkToggle(sScroll, sy, "Jitter Posisi Kursor",  CFG.coordJitter, function(v) CFG.coordJitter=v end); sy=sy+32
+mkToggle(sScroll, sy, "Istirahat Otomatis",    CFG.fatigueOn,   function(v) CFG.fatigueOn=v end); sy=sy+32
+
+sSection("JARINGAN", sy); sy=sy+20
+mkToggle(sScroll, sy, "Adaptasi Lag Jaringan", CFG.netAdapt,    function(v) CFG.netAdapt=v end); sy=sy+32
+
+local lagHintL = mkLbl(sScroll, "Saat lag, toleransi minigame diperlebar\notomatis sesuai rata-rata frame time.", 8.5, Enum.Font.Gotham, C.muted)
+lagHintL.Size     = UDim2.new(1, -24, 0, 28)
+lagHintL.Position = UDim2.new(0, 12, 0, sy)
+lagHintL.TextWrapped = true
+sy = sy + 34
+
+sSection("KEAMANAN", sy); sy=sy+20
+mkToggle(sScroll, sy, "Anti-AFK Mouse Sweep",  CFG.antiAFK,     function(v) CFG.antiAFK=v end); sy=sy+32
+mkToggle(sScroll, sy, "Admin Guard (Auto-Kick)",CFG.adminGuard,  function(v) CFG.adminGuard=v end); sy=sy+32
+mkToggle(sScroll, sy, "Watchdog Auto-Reset",   CFG.watchdog,    function(v) CFG.watchdog=v end); sy=sy+32
+
+sScroll.CanvasSize = UDim2.new(0, 0, 0, sy + 10)
+
+-- ════════════════════════════════════════════════════
+-- TAB 4 — NOTIF (Webhook)
+-- ════════════════════════════════════════════════════
+local pN = panels["Notif"]
+
+-- Tutorial card
+local tutCard = Instance.new("Frame", pN)
+tutCard.Size             = UDim2.new(1, -20, 0, 118)
+tutCard.Position         = UDim2.new(0, 10, 0, 10)
+tutCard.BackgroundColor3 = C.card
+tutCard.BorderSizePixel  = 0
+rnd(tutCard, 7)
+mkStroke(tutCard, C.border)
+
+local tutHdrL = mkLbl(tutCard, "CARA MENAMBAHKAN WEBHOOK", 8, Enum.Font.GothamBold, C.gold)
+tutHdrL.Size     = UDim2.new(1, -16, 0, 12)
+tutHdrL.Position = UDim2.new(0, 10, 0, 8)
+
+local tutText = [[1. Buka server Discord kamu
+2. Klik Edit Channel pada channel tujuan
+3. Pilih tab Integrations, lalu Webhooks
+4. Klik New Webhook, beri nama bebas
+5. Klik Copy Webhook URL
+6. Paste URL di kotak di bawah ini
+7. Aktifkan toggle, lalu tekan Test Notif]]
+
+local tutL = Instance.new("TextLabel", tutCard)
+tutL.BackgroundTransparency = 1
+tutL.Size     = UDim2.new(1, -16, 0, 96)
+tutL.Position = UDim2.new(0, 10, 0, 20)
+tutL.Text     = tutText
+tutL.TextColor3 = C.dim
+tutL.Font     = Enum.Font.Gotham
+tutL.TextSize = 9
+tutL.TextXAlignment  = Enum.TextXAlignment.Left
+tutL.TextYAlignment  = Enum.TextYAlignment.Top
+tutL.TextWrapped     = true
+
+-- Notif dikirim saat:
+local notifWhenL = mkLbl(pN, "Notif dikirim saat: tangkapan (tiap 10 ikan), watchdog reset, admin masuk.", 8.5, Enum.Font.Gotham, C.muted)
+notifWhenL.Size     = UDim2.new(1, -20, 0, 24)
+notifWhenL.Position = UDim2.new(0, 10, 0, 132)
+notifWhenL.TextWrapped = true
+
+mkSep(pN, 160)
+
+-- URL input
+local wLabel = mkLbl(pN, "WEBHOOK URL", 8, Enum.Font.GothamBold, C.muted)
+wLabel.Size     = UDim2.new(1, -20, 0, 12)
+wLabel.Position = UDim2.new(0, 10, 0, 168)
+
+local wBox = Instance.new("TextBox", pN)
+wBox.Size             = UDim2.new(1, -20, 0, 24)
+wBox.Position         = UDim2.new(0, 10, 0, 183)
+wBox.BackgroundColor3 = C.card
+wBox.TextColor3       = C.txt
+wBox.PlaceholderText  = "https://discord.com/api/webhooks/..."
+wBox.PlaceholderColor3= C.muted
+wBox.Text             = webhookURL
+wBox.ClearTextOnFocus = false
+wBox.Font             = Enum.Font.Code
+wBox.TextSize         = 8.5
+wBox.TextXAlignment   = Enum.TextXAlignment.Left
+wBox.BorderSizePixel  = 0
+rnd(wBox, 5)
+mkStroke(wBox, C.border)
+
+local wbPad = Instance.new("UIPadding", wBox)
+wbPad.PaddingLeft = UDim.new(0, 8)
+
+wBox.FocusLost:Connect(function() webhookURL = wBox.Text end)
+
+-- Toggle + Test row
+mkToggle(pN, 213, "Kirim Notifikasi Discord", false, function(v)
 	webhookOn = v
 end)
 
-local testBtn = btn(whCard, {
-	text  = "Test Ping",
-	sz    = UDim2.new(0, 72, 0, 20),
-	pos   = UDim2.new(1, -80, 0, 70),
-	bg    = C.bg,
-	tc    = C.accent,
-	size  = 9.5,
-	r     = 5,
-})
+local testBtn = mkBtn(pN, "Test Notif", C.bg, C.gold, 9.5)
+testBtn.Size     = UDim2.new(0, 80, 0, 20)
+testBtn.Position = UDim2.new(1, -90, 0, 215)
+mkStroke(testBtn, C.border)
+
 testBtn.MouseButton1Click:Connect(function()
-	sendWebhook("🧪 Test Webhook",
-		"Koneksi dari Roblox berhasil! Sistem notifikasi aktif.", 0x00ff88)
+	sendWebhook("Test Notifikasi", "Webhook berhasil terhubung dari Roblox.", 0xb49352)
 end)
 
-sep(pW, 112)
+-- ════════════════════════════════════════════════════
+-- TAB 5 — LOG (Console)
+-- ════════════════════════════════════════════════════
+local pL = panels["Log"]
 
--- Console Log
-lbl(pW, {
-	text  = "CONSOLE LOG",
-	sz    = UDim2.new(1,-24,0,14),
-	pos   = UDim2.new(0,12,0,118),
-	size  = 9, color = C.txtMuted, font = Enum.Font.GothamBold,
-})
+local logEnabled = false
 
-local consoleEnabled = false
--- Log toggle & clear — placed to the right of the section header
-local logBtn = btn(pW, {
-	text  = "Log: OFF",
-	sz    = UDim2.new(0,56,0,18),
-	pos   = UDim2.new(1,-124,0,116),
-	bg    = C.card,
-	tc    = C.txtMuted,
-	size  = 9, r = 4,
-})
-local clearBtn = btn(pW, {
-	text  = "Clear",
-	sz    = UDim2.new(0,44,0,18),
-	pos   = UDim2.new(1,-68,0,116),
-	bg    = C.card,
-	tc    = C.txtMuted,
-	size  = 9, r = 4,
-})
+local logToggle = mkBtn(pL, "Log: OFF", C.card, C.muted, 9.5)
+logToggle.Size     = UDim2.new(0, 70, 0, 22)
+logToggle.Position = UDim2.new(0, 10, 0, 8)
+mkStroke(logToggle, C.border)
 
-local logSF = Instance.new("ScrollingFrame", pW)
-logSF.Size = UDim2.new(1,-24,1,-142)
-logSF.Position = UDim2.new(0,12,0,140)
-logSF.BackgroundColor3 = C.bg2
-logSF.BorderSizePixel = 0
+local logClear = mkBtn(pL, "Hapus", C.card, C.muted, 9.5)
+logClear.Size     = UDim2.new(0, 56, 0, 22)
+logClear.Position = UDim2.new(0, 86, 0, 8)
+mkStroke(logClear, C.border)
+
+local logInfoL = mkLbl(pL, "Log aktif hanya saat tab Log dipilih.", 8.5, Enum.Font.Gotham, C.muted)
+logInfoL.Size     = UDim2.new(1, -180, 0, 22)
+logInfoL.Position = UDim2.new(0, 150, 0, 10)
+logInfoL.TextXAlignment = Enum.TextXAlignment.Right
+
+mkSep(pL, 36)
+
+local logSF = Instance.new("ScrollingFrame", pL)
+logSF.Size             = UDim2.new(1, -20, 1, -44)
+logSF.Position         = UDim2.new(0, 10, 0, 42)
+logSF.BackgroundColor3 = C.card
+logSF.BorderSizePixel  = 0
 rnd(logSF, 6)
-stroke(logSF)
-logSF.CanvasSize = UDim2.new(0,0,0,0)
-logSF.ScrollBarThickness = 3
-logSF.ScrollBarImageColor3 = C.border
+mkStroke(logSF, C.border)
+logSF.CanvasSize          = UDim2.new(0, 0, 0, 0)
+logSF.ScrollBarThickness  = 2
+logSF.ScrollBarImageColor3= C.border
 
-local logList = Instance.new("UIListLayout", logSF)
-logList.SortOrder = Enum.SortOrder.LayoutOrder
-logList.Padding = UDim.new(0,2)
+local logPad = Instance.new("UIPadding", logSF)
+logPad.PaddingTop    = UDim.new(0, 5)
+logPad.PaddingLeft   = UDim.new(0, 6)
+logPad.PaddingRight  = UDim.new(0, 4)
+logPad.PaddingBottom = UDim.new(0, 5)
+
+local logLL  = Instance.new("UIListLayout", logSF)
+logLL.SortOrder = Enum.SortOrder.LayoutOrder
+logLL.Padding   = UDim.new(0, 2)
 
 local logN = 0
 local function addLog(txt)
-	if not consoleEnabled then return end
+	if not logEnabled then return end
 	logN = logN + 1
 	local row = Instance.new("TextLabel", logSF)
-	row.LayoutOrder = logN
-	row.Size = UDim2.new(1, 0, 0, 14)
+	row.LayoutOrder  = logN
+	row.Size         = UDim2.new(1, 0, 0, 13)
 	row.BackgroundTransparency = 1
-	row.Text = string.format("[%s] %s", os.date("%H:%M:%S"), tostring(txt))
-	row.TextColor3 = C.txtDim
-	row.Font = Enum.Font.Code
-	row.TextSize = 9
+	row.Text         = string.format("[%s] %s", os.date("%H:%M:%S"), tostring(txt))
+	row.TextColor3   = C.dim
+	row.Font         = Enum.Font.Code
+	row.TextSize     = 8.5
 	row.TextXAlignment = Enum.TextXAlignment.Left
-	row.TextWrapped = true
+	row.TextWrapped  = true
 	task.defer(function()
-		logSF.CanvasSize = UDim2.new(0,0,0, logList.AbsoluteContentSize.Y + 4)
+		logSF.CanvasSize     = UDim2.new(0, 0, 0, logLL.AbsoluteContentSize.Y + 8)
 		logSF.CanvasPosition = Vector2.new(0, math.huge)
 	end)
-	-- trim old logs
-	local kids = logSF:GetChildren()
-	local count = 0
-	for _, k in ipairs(kids) do if k:IsA("TextLabel") then count=count+1 end end
-	if count > 60 then
-		for _, k in ipairs(kids) do
-			if k:IsA("TextLabel") then k:Destroy(); break end
-		end
+	-- trim
+	local kids = {}
+	for _, k in ipairs(logSF:GetChildren()) do
+		if k:IsA("TextLabel") then kids[#kids+1] = k end
 	end
+	if #kids > 80 then kids[1]:Destroy() end
 end
 
-logBtn.MouseButton1Click:Connect(function()
-	consoleEnabled = not consoleEnabled
-	logBtn.Text = consoleEnabled and "Log: ON" or "Log: OFF"
-	logBtn.TextColor3 = consoleEnabled and C.green or C.txtMuted
+logToggle.MouseButton1Click:Connect(function()
+	logEnabled = not logEnabled
+	logToggle.Text      = logEnabled and "Log: ON" or "Log: OFF"
+	logToggle.TextColor3= logEnabled and C.sage or C.muted
+	local origBg = logEnabled and Color3.fromRGB(18, 26, 18) or C.card
+	logToggle.BackgroundColor3 = origBg
 end)
-clearBtn.MouseButton1Click:Connect(function()
+
+logClear.MouseButton1Click:Connect(function()
 	for _, k in ipairs(logSF:GetChildren()) do
 		if k:IsA("TextLabel") then k:Destroy() end
 	end
-	logSF.CanvasSize = UDim2.new(0,0,0,0)
-	logN = 0
+	logSF.CanvasSize = UDim2.new(0, 0, 0, 0); logN = 0
 end)
 
--- ═══════════════════════════════════════════════════════════
+-- ════════════════════════════════════════════════════
 -- FISHING ENGINE
--- ═══════════════════════════════════════════════════════════
+-- ════════════════════════════════════════════════════
 
 local function trulyVis(obj)
-	if not obj or typeof(obj)~="Instance" then return false end
+	if not obj or typeof(obj) ~= "Instance" then return false end
 	if not obj:IsA("GuiObject") or not obj.Visible then return false end
-	local ok,sz = pcall(function() return obj.AbsoluteSize end)
-	if not ok or sz.X<=0 or sz.Y<=0 then return false end
+	local ok, sz = pcall(function() return obj.AbsoluteSize end)
+	if not ok or sz.X <= 0 or sz.Y <= 0 then return false end
 	local cur = obj.Parent
-	while cur and cur~=game do
-		if cur:IsA("ScreenGui") then if not cur.Enabled then return false end; break
-		elseif cur:IsA("GuiObject") then if not cur.Visible then return false end end
+	while cur and cur ~= game do
+		if cur:IsA("ScreenGui") then
+			if not cur.Enabled then return false end; break
+		elseif cur:IsA("GuiObject") then
+			if not cur.Visible then return false end
+		end
 		cur = cur.Parent
 	end
 	return true
 end
 
-local function findTool()
-	local ch = me.Character
-	local bp = me.Backpack
-	if ch then
-		for _, n in ipairs(FISH_TOOLS) do
-			local t = ch:FindFirstChild(n)
-			if t and t:IsA("Tool") then return t end
-		end
-		local any = ch:FindFirstChildWhichIsA("Tool")
-		if any then return any end
-	end
-	for _, n in ipairs(FISH_TOOLS) do
-		local t = bp:FindFirstChild(n)
-		if t then return t end
-	end
-	return bp:FindFirstChildWhichIsA("Tool")
-end
-
-local function equipRod()
-	local ch = me.Character
-	if not ch then return nil end
-	local hum = ch:FindFirstChildOfClass("Humanoid")
-	if not hum then return nil end
-	local eq = ch:FindFirstChildWhichIsA("Tool")
+local function findAndEquipRod()
+	local ch = me.Character; if not ch then return nil end
+	local hum = ch:FindFirstChildOfClass("Humanoid"); if not hum then return nil end
+	local eq  = ch:FindFirstChildWhichIsA("Tool")
 	if eq then return eq end
-	local t = findTool()
-	if t then
-		pcall(function() hum:EquipTool(t) end)
-		task.wait(0.55)
+	local bp = me.Backpack
+	for _, n in ipairs(FISH_TOOLS) do
+		local t = bp:FindFirstChild(n) or ch:FindFirstChild(n)
+		if t then
+			pcall(function() hum:EquipTool(t) end)
+			task.wait(0.5)
+			return ch:FindFirstChildWhichIsA("Tool")
+		end
+	end
+	local any = bp:FindFirstChildWhichIsA("Tool")
+	if any then
+		pcall(function() hum:EquipTool(any) end)
+		task.wait(0.5)
 		return ch:FindFirstChildWhichIsA("Tool")
 	end
 	return nil
 end
 
--- Space key control
 local function setSpace(v, force)
-	if isSpace==v and not force then return end
+	if isSpace == v and not force then return end
 	local now = os.clock()
-	if not force and (now-lastSpTgl)<0.03 then return end
+	if not force and (now - lastSpTgl) < 0.03 then return end
 	pcall(function() VIM:SendKeyEvent(v, Enum.KeyCode.Space, false, game) end)
-	isSpace=v; lastSpTgl=now
+	isSpace = v; lastSpTgl = now
 end
 
--- Minigame bar detection
 local function getBars()
 	if wBar and rBar and wBar.Parent and rBar.Parent
 		and trulyVis(wBar) and trulyVis(rBar) then
 		return wBar, rBar
 	end
 	local now = os.clock()
-	if now-lastScan < 0.05 then return nil,nil end
-	lastScan=now; wBar=nil; rBar=nil
+	-- adaptive scan interval: lebih jarang saat lag
+	local scanInterval = lagging() and 0.10 or 0.05
+	if now - lastScan < scanInterval then return nil, nil end
+	lastScan = now; wBar = nil; rBar = nil
 
 	local pg = me:FindFirstChild("PlayerGui")
-	if not pg then return nil,nil end
+	if not pg then return nil, nil end
 
-	-- Pass 1: name-based scan
+	-- Pass 1: nama
 	for _, v in ipairs(pg:GetDescendants()) do
 		if v:IsA("GuiObject") and trulyVis(v) then
-			local ln = v.Name:lower()
+			local ln  = v.Name:lower()
 			local par = v.Parent
 			if par and par:IsA("GuiObject") then
-				local isW = ln=="whitebar" or ln=="playerbar"
+				local isW = ln == "whitebar" or ln == "playerbar"
 					or (ln:find("white") and ln:find("bar"))
 				if isW then
 					for _, sib in ipairs(par:GetChildren()) do
-						if sib~=v and sib:IsA("GuiObject") and trulyVis(sib) then
+						if sib ~= v and sib:IsA("GuiObject") and trulyVis(sib) then
 							local sn = sib.Name:lower()
 							if sn:find("red") or sn:find("target") or sn:find("goal") then
 								if v.AbsoluteSize.X > 10 then
-									wBar=v; rBar=sib; return v,sib
+									wBar = v; rBar = sib; return v, sib
 								end
 							end
 						end
@@ -1136,110 +1156,95 @@ local function getBars()
 		end
 	end
 
-	-- Pass 2: color-based scan (fallback)
+	-- Pass 2: warna
 	for _, v in ipairs(pg:GetDescendants()) do
 		if v:IsA("GuiObject") and trulyVis(v)
-			and v.AbsoluteSize.X>12 and v.AbsoluteSize.Y>5 then
+			and v.AbsoluteSize.X > 12 and v.AbsoluteSize.Y > 5 then
 			local c   = v.BackgroundColor3
 			local par = v.Parent
-			if c.R>0.78 and c.G>0.78 and c.B>0.78
+			if c.R > 0.78 and c.G > 0.78 and c.B > 0.78
 				and par and par:IsA("GuiObject") then
 				for _, sib in ipairs(par:GetChildren()) do
-					if sib~=v and sib:IsA("GuiObject") and trulyVis(sib)
-						and sib.AbsoluteSize.X>12 then
+					if sib ~= v and sib:IsA("GuiObject") and trulyVis(sib)
+						and sib.AbsoluteSize.X > 12 then
 						local sc = sib.BackgroundColor3
-						if sc.R>0.46 and sc.G<0.22 and sc.B<0.22 then
-							wBar=v; rBar=sib; return v,sib
+						if sc.R > 0.46 and sc.G < 0.22 and sc.B < 0.22 then
+							wBar = v; rBar = sib; return v, sib
 						end
 					end
 				end
 			end
 		end
 	end
-	return nil,nil
+	return nil, nil
 end
 
--- Fatigue / rest break
-local function checkFatigue()
+local function doFatigue()
 	if not CFG.fatigueOn then return end
-	fatigueCnt = fatigueCnt + 1
-	if fatigueCnt < CFG.fatEvery then return end
-	fatigueCnt = 0
-	addLog("Fatigue break " .. CFG.fatDur .. "s...")
+	fatCnt = fatCnt + 1
+	if fatCnt < CFG.fatEvery then return end
+	fatCnt = 0
+	addLog("Istirahat " .. CFG.fatDur .. "s")
 	setSpace(false, true)
 	setPhase(0)
-	statusLbl.Text = "Istirahat " .. CFG.fatDur .. "s"
-	setDot(C.orange)
+	stateL.Text = "Istirahat " .. CFG.fatDur .. "s"
+	setDot(C.amber)
 	task.wait(CFG.fatDur)
-	setDot(C.green)
+	setDot(C.sage)
 end
 
--- Reset function
 doReset = function(reason)
-	fishState  = "IDLE"
-	isSpace    = false
-	isCasting  = false
-	successDone= false
-	mgEverSeen = false
-	mgStarted  = false
-	wBar       = nil
-	rBar       = nil
-	lastScan   = 0
-	lastWC     = nil
-	wVel       = 0
-	mgLastSeen = 0
-	castSess   = castSess + 1
-	idleAt     = os.clock()
+	fishState   = "IDLE"
+	isSpace     = false
+	isCasting   = false
+	successDone = false
+	mgEverSeen  = false
+	mgStarted   = false
+	wBar        = nil; rBar = nil
+	lastScan    = 0; lastWC = nil; wVel = 0; mgLastSeen = 0
+	castSess    = castSess + 1
+	idleAt      = os.clock()
 	pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.Space, false, game) end)
 	setPhase(0)
-	if active then
-		statusLbl.Text = "Idle"
-		setDot(C.green)
-	end
-	if reason then
-		addLog("Reset: " .. reason)
-	end
+	if active then stateL.Text = "Idle"; setDot(C.sage) end
+	if reason then addLog("Reset: " .. reason) end
 end
 
--- Fish caught handler
 local function onCatch(why)
 	if successDone then return end
 	successDone = true
 	setSpace(false, true)
-	fishState  = "DONE"
-	setPhase(4)
-	fishCount  = fishCount + 1
-
-	caughtLbl.Text = "Tangkapan: " .. fishCount .. " ikan"
-	statusLbl.Text = "Caught #" .. fishCount
-	setDot(C.green)
+	fishState = "DONE"; setPhase(4)
+	fishCount = fishCount + 1
+	fishCountL.Text = "Tangkapan: " .. fishCount .. " ikan"
+	stateL.Text     = "Caught #" .. fishCount
+	setDot(C.sage)
 	addLog("Caught #" .. fishCount .. "  (" .. why .. ")")
 
-	-- Webhook: ikan tertangkap
 	if fishCount == 1 or fishCount % 10 == 0 then
-		sendWebhook("🐟 Update Tangkapan",
+		sendWebhook("Update Tangkapan",
 			string.format("Sudah menangkap **%d ikan** dalam sesi ini.", fishCount),
-			0x00aaff)
+			0xb49352)
 	end
 
-	checkFatigue()
+	doFatigue()
 
 	local sess = castSess
-	task.delay(jt(CFG.recastDly, 0.15), function()
-		if not NF.alive or not active or castSess~=sess then return end
+	task.delay(jt(CFG.recastDly, 0.12), function()
+		if not _S.alive or not active or castSess ~= sess then return end
 		doReset(nil)
 		task.wait(0.06)
-		if active then fishState="IDLE"; idleAt=os.clock() end
+		if active then fishState = "IDLE"; idleAt = os.clock() end
 	end)
 end
 
--- Heartbeat controller — throttled to ~60fps, very light
+-- Heartbeat — presisi tinggi, throttled 60fps
 local hbLast = 0
-local hbConn = RS.Heartbeat:Connect(function()
-	if not NF.alive then return end
+local hbConn = RS.Heartbeat:Connect(function(dt)
+	updateLag(dt)
+	if not _S.alive then return end
 	if not active then
-		if isSpace then setSpace(false,true) end
-		return
+		if isSpace then setSpace(false, true) end; return
 	end
 	local now = os.clock()
 	if now - hbLast < 0.016 then return end
@@ -1247,282 +1252,246 @@ local hbConn = RS.Heartbeat:Connect(function()
 	safe(function()
 		local rod = RODS[rodIdx]
 
-		-- ── WAITING state ──────────────────────────────────
 		if fishState == "WAITING" then
 			local el = now - biteStart
-			setPct(math.clamp(el/CFG.biteWait, 0, 1))
-			statusLbl.Text = string.format("Menunggu... %.0fs", math.max(0, CFG.biteWait-el))
+			setPct(math.clamp(el / CFG.biteWait, 0, 1))
+			stateL.Text = string.format("Menunggu... %.0fs", math.max(0, CFG.biteWait - el))
 			if el >= CFG.biteWait then
-				-- Bite time reached → start minigame phase
-				fishState   = "MINIGAME"
-				mgStart     = now
-				mgEverSeen  = false
-				mgStarted   = false
-				mgLastSeen  = 0
-				successDone = false
-				wBar=nil; rBar=nil
-				lastScan=0; lastWC=nil; wVel=0; lastWTime=now
-				setSpace(false, true)
-				setPhase(3); setPct(0)
-				statusLbl.Text = "Minigame!"
-				addLog("Minigame started")
+				fishState   = "MINIGAME"; mgStart = now
+				mgEverSeen  = false; mgStarted = false
+				mgLastSeen  = 0; successDone = false
+				wBar = nil; rBar = nil
+				lastScan = 0; lastWC = nil; wVel = 0; lastWTime = now
+				setSpace(false, true); setPhase(3); setPct(0)
+				stateL.Text = "Minigame"; addLog("Minigame started")
 			end
 			return
 		end
 
-		-- ── MINIGAME state ─────────────────────────────────
 		if fishState ~= "MINIGAME" then return end
 
-		local el      = now - mgStart
-		local timeout = 11 + rod.prog * 3.2
-		setPct(math.clamp(el/timeout, 0, 1))
-
+		local el = now - mgStart
+		-- Adaptasi timeout saat lag: beri waktu lebih
+		local timeout = (11 + rod.prog * 3.2) * (lagging() and 1.4 or 1.0)
+		setPct(math.clamp(el / timeout, 0, 1))
 		if el >= timeout then
-			setSpace(false, true)
-			onCatch("timeout")
-			return
+			setSpace(false, true); onCatch("timeout"); return
 		end
 
 		local wb, rb = getBars()
 		if wb and rb and trulyVis(wb) and trulyVis(rb) then
 			mgEverSeen = true; mgLastSeen = now
 			if not mgStarted then
-				mgStarted = true
-				setSpace(false, true)
-				lastWC=nil; wVel=0; lastWTime=now
+				mgStarted = true; setSpace(false, true)
+				lastWC = nil; wVel = 0; lastWTime = now
 			end
 
-			local wC   = wb.AbsolutePosition.X + wb.AbsoluteSize.X*0.5
-			local rL   = rb.AbsolutePosition.X
-			local rR   = rL + rb.AbsoluteSize.X
-			local rC   = (rL+rR)*0.5
-			local rawDt= now - lastWTime
-			local dt   = math.clamp(rawDt, 0.007, 0.13)
+			local wC    = wb.AbsolutePosition.X + wb.AbsoluteSize.X * 0.5
+			local rL    = rb.AbsolutePosition.X
+			local rR    = rL + rb.AbsoluteSize.X
+			local rC    = (rL + rR) * 0.5
+			local rawDt = now - lastWTime
+			local dt    = math.clamp(rawDt, 0.007, 0.16)  -- 0.16 toleransi lebih besar saat lag
 
 			if lastWC then
-				local inst = (wC-lastWC)/dt
-				local sm   = math.clamp(0.26/rod.lure, 0.1, 0.30)
-				wVel = wVel*(1-sm) + inst*sm
+				local inst = (wC - lastWC) / dt
+				local sm   = math.clamp(0.26 / rod.lure, 0.10, 0.30)
+				wVel = wVel * (1 - sm) + inst * sm
 			end
-			lastWC=wC; lastWTime=now
+			lastWC = wC; lastWTime = now
 
-			local ahead  = math.clamp(math.abs(wVel)/1650, 0.03, 0.17) * math.sqrt(rod.lure)
-			local pred   = wC + wVel*ahead
+			-- Extrapolation ahead diperbesar saat lag
+			local lagFactor = lagging() and 1.5 or 1.0
+			local ahead  = math.clamp(math.abs(wVel) / 1650, 0.03, 0.17) * math.sqrt(rod.lure) * lagFactor
+			local pred   = wC + wVel * ahead
 			local rw     = math.max(rb.AbsoluteSize.X, 1)
-			local lag    = math.clamp(rawDt/0.05-1, 0, 1.2)
-			local tol    = math.clamp(rw*(0.16 + lag*0.14 + rod.lure*0.025), 4, 25)
-			local inside = pred>=(rL-tol) and pred<=(rR+tol)
+			local lag    = math.clamp(rawDt / 0.05 - 1, 0, 1.5)
+			local tol    = math.clamp(rw * (0.16 + lag * 0.14 + rod.lure * 0.025), 4, 28)
+			local inside = pred >= (rL - tol) and pred <= (rR + tol)
 
 			if inside then
 				if     wC < rL then setSpace(true)
 				elseif wC > rR then setSpace(false)
 				else
 					local e = wC - rC
-					if math.abs(e) > tol*0.4 then setSpace(e<0) end
+					if math.abs(e) > tol * 0.4 then setSpace(e < 0) end
 				end
 			else
 				local e = rC - pred
 				if     e >  tol then setSpace(true)
 				elseif e < -tol then setSpace(false)
-				elseif math.abs(wVel) > 135 then setSpace(wVel<0) end
+				elseif math.abs(wVel) > 130 then setSpace(wVel < 0) end
 			end
-
-			statusLbl.Text = string.format("Playing... %.0fs", el)
+			stateL.Text = string.format("Playing... %.0fs", el)
 		else
 			if mgEverSeen then
-				if mgLastSeen>0 and (now-mgLastSeen)>=0.20 then
-					setSpace(false,true)
-					onCatch("bar-gone")
+				-- bar hilang = minigame selesai
+				if mgLastSeen > 0 and (now - mgLastSeen) >= 0.20 then
+					setSpace(false, true); onCatch("bar-gone")
 				end
 			else
-				-- pre-bar sync pulse to trigger bite detection
-				local beat = math.floor((now-mgStart)*3.0)%2 == 0
+				-- pre-bar sync
+				local beat = math.floor((now - mgStart) * 3.0) % 2 == 0
 				setSpace(beat)
-				statusLbl.Text = string.format("Sync... %.0fs", el)
+				stateL.Text = string.format("Sync... %.0fs", el)
 			end
 		end
 	end)
 end)
-table.insert(NF.conns, hbConn)
+table.insert(_S.c, hbConn)
 
--- Cast loop — controls the rod activation cycle
+-- Cast loop
 task.spawn(function()
-	while NF.alive do
+	while _S.alive do
 		task.wait(0.14)
-		if not NF.alive or not active then continue end
+		if not _S.alive or not active then continue end
 		safe(function()
 			local ch  = me.Character; if not ch then return end
 			local hum = ch:FindFirstChildOfClass("Humanoid"); if not hum then return end
-
-			-- disable jumping so character stays put while fishing
 			if hum:GetStateEnabled(Enum.HumanoidStateType.Jumping) then
 				hum:SetStateEnabled(Enum.HumanoidStateType.Jumping, false)
 			end
-
-			local tool = equipRod()
+			local tool = findAndEquipRod()
 			if not tool then
-				statusLbl.Text = "No Rod!"
-				setDot(C.red)
-				return
+				stateL.Text = "Tidak ada rod!"; setDot(C.rust); return
 			end
-
-			if fishState=="IDLE" and not isCasting then
-				isCasting = true
-				castSess  = castSess + 1
+			if fishState == "IDLE" and not isCasting then
+				isCasting = true; castSess = castSess + 1
 				local sess = castSess
-
 				task.spawn(function()
-					if not NF.alive or not active or castSess~=sess then
-						isCasting=false; return
+					if not _S.alive or not active or castSess ~= sess then
+						isCasting = false; return
 					end
 					local cam = workspace.CurrentCamera
-					if not cam then isCasting=false; return end
-
+					if not cam then isCasting = false; return end
 					local rod = RODS[rodIdx]
-					local ctr = jv(cam.ViewportSize/2)
-
-					fishState = "CASTING"
-					setPhase(1); setPct(0)
-					statusLbl.Text = "Casting..."
-					setDot(C.accent)
-
+					local ctr = jv(cam.ViewportSize / 2)
+					fishState = "CASTING"; setPhase(1); setPct(0)
+					stateL.Text = "Casting..."; setDot(C.amber)
 					pcall(function() tool:Activate() end)
 					pcall(function() VU:Button1Down(ctr, cam.CFrame) end)
-
-					local dur = jt(CFG.castHold / math.max(1, math.sqrt(rod.lure)*0.85), 0.1)
+					-- Perpanjang durasi cast saat lag
+					local lagMult = lagging() and 1.2 or 1.0
+					local dur = jt(CFG.castHold / math.max(1, math.sqrt(rod.lure) * 0.85), 0.09) * lagMult
 					local t0  = os.clock()
-					while os.clock()-t0 < dur do
+					while os.clock() - t0 < dur do
 						task.wait(0.04)
-						if not active or not NF.alive or castSess~=sess then
+						if not active or not _S.alive or castSess ~= sess then
 							pcall(function() VU:Button1Up(ctr, cam.CFrame) end)
-							isCasting=false; return
+							isCasting = false; return
 						end
-						setPct((os.clock()-t0)/dur)
+						setPct((os.clock() - t0) / dur)
 					end
 					pcall(function() VU:Button1Up(ctr, cam.CFrame) end)
 					setPct(1)
-
-					task.wait(jt(0.13, 0.08))
-					if not active or not NF.alive or castSess~=sess then
-						isCasting=false; return
+					task.wait(jt(0.12, 0.08))
+					if not active or not _S.alive or castSess ~= sess then
+						isCasting = false; return
 					end
-
-					fishState  = "WAITING"
-					biteStart  = os.clock()
+					fishState = "WAITING"; biteStart = os.clock()
 					setPhase(2); setPct(0)
-					statusLbl.Text = "Menunggu..."
-					setDot(C.orange)
+					stateL.Text = "Menunggu..."; setDot(C.amber)
 					addLog("Cast #" .. castSess)
-					isCasting  = false
+					isCasting = false
 				end)
 			end
 		end)
 	end
 end)
 
--- Watchdog — runs every 5s, lightweight
+-- Watchdog — 5 detik sekali, sangat ringan
 task.spawn(function()
-	while NF.alive do
+	while _S.alive do
 		task.wait(5)
-		if not NF.alive or not active or not CFG.watchdog then continue end
+		if not _S.alive or not active or not CFG.watchdog then continue end
 		local now = os.clock()
+		-- Threshold diperlebar saat lag
+		local idleThresh = lagging() and 18 or 12
+		local waitThresh = CFG.biteWait + (lagging() and 14 or 9)
 		local evt = nil
-		if   fishState=="IDLE"    and not isCasting and (now-idleAt)>12 then
+		if   fishState == "IDLE"    and not isCasting and (now - idleAt)    > idleThresh then
 			evt = "idle-lock"
-		elseif fishState=="WAITING" and (now-biteStart)>(CFG.biteWait+9) then
+		elseif fishState == "WAITING" and (now - biteStart) > waitThresh then
 			evt = "bite-timeout"
-		elseif fishState=="CASTING" and not isCasting and (now-idleAt)>10 then
+		elseif fishState == "CASTING" and not isCasting and (now - idleAt)  > 10 then
 			evt = "cast-stuck"
 		end
 		if evt then
-			addLog("Watchdog: " .. evt .. " — resetting")
-			sendWebhook("⚠️ Watchdog Reset",
-				"Bot mengalami stuck (" .. evt .. ") dan melakukan reset otomatis.",
-				0xffaa00)
+			addLog("Watchdog: " .. evt)
+			sendWebhook("Watchdog Reset",
+				"Bot mengalami stuck (" .. evt .. ") dan melakukan reset otomatis.", 0xc47830)
 			doReset(evt)
 		end
 	end
 end)
 
--- Anti-AFK mouse sweep
+-- Anti-AFK
 task.spawn(function()
-	while NF.alive do
-		task.wait(math.random(85, 145))
-		if not NF.alive then break end
+	while _S.alive do
+		task.wait(math.random(88, 148))
+		if not _S.alive then break end
 		if CFG.antiAFK then
 			pcall(function()
-				local cam = workspace.CurrentCamera
-				if cam then
-					local sz = cam.ViewportSize
-					VU:MouseMoveEvent(
-						Vector2.new(sz.X/2 + math.random(-60,60), sz.Y/2 + math.random(-45,45)),
-						cam.CFrame)
-				end
+				local cam = workspace.CurrentCamera; if not cam then return end
+				local sz = cam.ViewportSize
+				VU:MouseMoveEvent(
+					Vector2.new(sz.X/2 + math.random(-55,55), sz.Y/2 + math.random(-40,40)),
+					cam.CFrame)
 			end)
 		end
 	end
 end)
 
--- Anti-AFK idle event
-local idleConn = me.Idled:Connect(function()
+local idledConn = me.Idled:Connect(function()
 	pcall(function()
-		local cam = workspace.CurrentCamera
-		if cam then
-			VU:Button2Down(Vector2.new(0,0), cam.CFrame)
-			task.wait(0.1)
-			VU:Button2Up(Vector2.new(0,0), cam.CFrame)
-		end
+		local cam = workspace.CurrentCamera; if not cam then return end
+		VU:Button2Down(Vector2.new(0,0), cam.CFrame)
+		task.wait(0.1)
+		VU:Button2Up(Vector2.new(0,0), cam.CFrame)
 	end)
 end)
-table.insert(NF.conns, idleConn)
+table.insert(_S.c, idledConn)
 
 -- Admin Guard
-local ADMIN_PATS = {
-	"moderator","roblox_adm","rbxadmin","staffmod",
-	"gamemaster","game_master","rblxmod",
-}
-local STAFF_GRP = 1200769
+local ADMIN_PATS = { "moderator","roblox_adm","rbxadmin","staffmod","gamemaster","game_master","rblxmod" }
+local STAFF_GRP  = 1200769
 
 local function checkPlayer(p)
-	if p==me or not p.Parent or not CFG.adminGuard then return end
+	if p == me or not p.Parent or not CFG.adminGuard then return end
 	task.wait(2.5)
 	if not p or not p.Parent then return end
-	local isAdmin = false
-	pcall(function() isAdmin = isAdmin or p:IsInGroup(STAFF_GRP) end)
-	if not isAdmin then
-		local ln = (p.Name..p.DisplayName):lower()
+	local isAdm = false
+	pcall(function() isAdm = isAdm or p:IsInGroup(STAFF_GRP) end)
+	if not isAdm then
+		local ln = (p.Name .. p.DisplayName):lower()
 		for _, pat in ipairs(ADMIN_PATS) do
-			if ln:find(pat) then isAdmin=true; break end
+			if ln:find(pat) then isAdm = true; break end
 		end
 	end
-	if not isAdmin then
+	if not isAdm then
 		pcall(function()
-			if game.CreatorType==Enum.CreatorType.Group then
-				if p:GetRankInGroup(game.CreatorId)>=200 then isAdmin=true end
+			if game.CreatorType == Enum.CreatorType.Group then
+				if p:GetRankInGroup(game.CreatorId) >= 200 then isAdm = true end
 			end
 		end)
 	end
-	if isAdmin then
-		addLog("Admin detected: " .. p.Name .. " — disconnecting!")
-		sendWebhook("🚨 Admin Masuk!",
-			string.format("Terdeteksi admin **%s** masuk server. Auto-disconnect dilakukan.", p.Name),
-			0xff2244)
-		active=false
-		setSpace(false,true)
-		task.wait(0.8)
-		me:Kick("Disconnected.")
+	if isAdm then
+		addLog("Admin terdeteksi: " .. p.Name)
+		sendWebhook("Admin Terdeteksi",
+			string.format("**%s** masuk server. Keluar otomatis.", p.Name), 0xa04040)
+		active = false; setSpace(false, true)
+		task.wait(0.8); me:Kick("Disconnected.")
 	end
 end
 
 for _, p in ipairs(Players:GetPlayers()) do task.spawn(checkPlayer, p) end
-local paConn = Players.PlayerAdded:Connect(function(p) task.spawn(checkPlayer,p) end)
-table.insert(NF.conns, paConn)
+local paConn = Players.PlayerAdded:Connect(function(p) task.spawn(checkPlayer, p) end)
+table.insert(_S.c, paConn)
 
--- Send startup notification
-task.delay(1, function()
-	sendWebhook("✅ Script Aktif",
-		"Nazhan Fishing System berhasil diinisialisasi dan siap digunakan.", 0x00dd88)
+-- Startup notification
+task.delay(1.2, function()
+	sendWebhook("Script Aktif", "Nazhan Fish v2.0 berhasil dijalankan dan siap digunakan.", 0xb49352)
 end)
 
-addLog("Nazhan Fishing System v1.0 — Ready")
+addLog("Nazhan Fish v2.0 siap.")
 setPhase(0)
