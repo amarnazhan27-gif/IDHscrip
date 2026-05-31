@@ -1,968 +1,1079 @@
--- ==========================================================
--- INDO HANGOUT ALL-IN-ONE: AUTOMININGNAZHAN.LUA (v6.0 FINAL)
--- DESIGNED WITH APPLE AESTHETICS & HIGH SECURITY ANTI-DETECTION
--- ==========================================================
+-- Indo Hangout Auto Farm
+-- finalv9.lua  |  by nazhan
+-- ============================================================
 
--- ==========================================================
--- INSTANCE CLEANUP (ANTI-MULTI RUN)
--- ==========================================================
-if shared.IH_Instance then
-    pcall(shared.IH_Instance.Clean)
+-- cleanup script lama jika ada
+if shared.NH_v9 then
+    pcall(shared.NH_v9.kill)
 end
 
-local InstanceManager = { Connections = {}, Active = true }
-
-function InstanceManager.Clean()
-    InstanceManager.Active = false
-    for _, conn in ipairs(InstanceManager.Connections) do
-        pcall(function() conn:Disconnect() end)
+local Manager = { conns = {}, alive = true }
+function Manager.kill()
+    Manager.alive = false
+    for _, c in ipairs(Manager.conns) do
+        pcall(function() c:Disconnect() end)
     end
-    table.clear(InstanceManager.Connections)
+    table.clear(Manager.conns)
 end
+shared.NH_v9 = Manager
 
-shared.IH_Instance = InstanceManager
+-- services
+local Players  = game:GetService("Players")
+local RS       = game:GetService("RunService")
+local VIM      = game:GetService("VirtualInputManager")
+local VU       = game:GetService("VirtualUser")
+local PFS      = game:GetService("PathfindingService")
+local TS       = game:GetService("TweenService")
+local me       = Players.LocalPlayer
 
--- ==========================================================
--- ROBLOX SERVICES & VARIABLES
--- ==========================================================
-local Players             = game:GetService("Players")
-local RunService          = game:GetService("RunService")
-local VirtualInputManager = game:GetService("VirtualInputManager")
-local VirtualUser         = game:GetService("VirtualUser")
-local PathfindingService  = game:GetService("PathfindingService")
-local TweenService        = game:GetService("TweenService")
-local player              = Players.LocalPlayer
+-- ============================================================
+-- ROD DATA  (lure = kecepatan bar, prog = kecepatan progress)
+-- ============================================================
+local RODS = {
+    { name = "Basic Rod",    lure = 1.00, prog = 1.00 },
+    { name = "Party Rod",    lure = 1.30, prog = 1.08 },
+    { name = "Shark Rod",    lure = 1.57, prog = 1.21 },
+    { name = "Piranha Rod",  lure = 1.84, prog = 1.33 },
+    { name = "Thermo Rod",   lure = 2.11, prog = 1.46 },
+    { name = "Flowers Rod",  lure = 2.38, prog = 1.59 },
+    { name = "Trisula Rod",  lure = 2.65, prog = 1.72 },
+    { name = "Feather Rod",  lure = 2.92, prog = 1.84 },
+    { name = "Wave Rod",     lure = 3.19, prog = 1.97 },
+    { name = "Duck Rod",     lure = 3.46, prog = 2.10 },
+    { name = "Planet Rod",   lure = 3.73, prog = 2.23 },
+    { name = "Earth Rod",    lure = 4.00, prog = 2.35 },
+    { name = "Volcano Rod",  lure = 4.27, prog = 2.48 },
+}
+local selectedRod = 1
 
--- ==========================================
--- STATE & CONFIG
--- ==========================================
-local mode            = "OFF"
-local isSpacePressed  = false
-local fishingState    = "IDLE"
+-- ============================================================
+-- CONFIG & STATE
+-- ============================================================
+local mode       = "OFF"
+local CAST_HOLD  = 1.8
+local BITE_WAIT  = 15.0
+local RECAST_DLY = 1.0
 
-local lastCastTime        = 0
-local lastMinigameGuiSeen = 0
-local isCasting           = false
-local minigameJustStarted = false
-local miningActive        = false
-local lastSpaceToggle     = 0
-local lastWhiteCenter     = nil
-local lastWhiteSample     = os.clock()
-local whiteVelocity       = 0
-local cachedWhiteBar      = nil
-local cachedRedBar        = nil
-local lastGuiScan         = 0
-local fishCaughtCount     = 0
-local crystalMinedCount   = 0
-local currentMiningTarget = nil
-local miningFailCount     = 0
-local miningHitCount      = 0
-local minigameStartTime   = 0
-local biteWaitStartTime   = 0
-local successHandled      = false
-local guiEverSeen         = false
+local FISH_TOOLS  = {"Fishing Rod","Rod","Pancing","FishingRod"}
+local MINE_TOOLS  = {"Pickaxe","Cangkul","Kapak","Mining","Pick","Hammer"}
+local CRYS_NAMES  = {"8sisi","Crystal","Kristal","Gem","Ore","Batu","Stone","mineral"}
+local CRYS_BL     = {
+    "lamp","light","glow","torch","lantern","bulb","neon",
+    "tree","bush","grass","leaf","vine","flower","plant",
+    "wall","floor","ceiling","roof","prop","decor","deco",
+    "fence","gate","door","window","sign","board","post",
+    "water","ocean","river","lake","pond","sea","wave",
+    "cloud","fog","sun","moon","star","sky","air",
+    "fire","flame","smoke","ember","spark","ash",
+    "spawn","check","zone","region","trigger","sensor",
+    "platform","road","path","bridge","stair","rail",
+    "house","building","room","ground","terrain","base","frame",
+}
 
--- FISHING CONFIG
-local FISH_BITE_WAIT     = 15.0
-local FISH_MINIGAME_MAX  = 15.0
-local FISH_RECAST_DELAY  = 1.0
-local FISH_CAST_DURATION = 1.8
+local STOP_DIST  = 2.5
+local WALK_SPEED = 24
 
--- MINING CONFIG
-local FISH_TOOL_NAMES      = {"Fishing Rod", "Rod", "Pancing", "FishingRod"}
-local MINE_TOOL_NAMES      = {"Pickaxe", "Cangkul", "Kapak", "Mining", "Pick", "Hammer"}
-local CRYSTAL_NAMES        = {"8sisi", "Crystal", "Kristal", "Gem", "Ore", "Batu"}
-local CRYSTAL_MATERIAL     = Enum.Material.Neon
-local MINE_STOP_DISTANCE   = 2.3
-local MINE_MAX_SCAN_DISTANCE = 260
-local PATH_RETRY_DELAY     = 0.35
-local MINE_SMOOTH_MOVE     = true
-local MINE_WALK_SPEED      = 24
+local CFG = {
+    timeJitter   = true,
+    coordJitter  = true,
+    pathJitter   = true,
+    fatigueBreak = true,
+    mouseAFK     = true,
+    adminGuard   = true,
+    antiFingerp  = true,
+    smoothMove   = true,
+}
 
--- ANTI-DETECTION CONFIG
-local ANTI_DET_TIME_JITTER     = true
-local ANTI_DET_COORD_JITTER    = true
-local ANTI_DET_WAYPOINT_JITTER = true
-local FATIGUE_BREAK_ENABLED    = true
-local FATIGUE_BREAK_FREQ       = 15
-local FATIGUE_BREAK_MIN        = 5
-local FATIGUE_BREAK_MAX        = 10
-local MOUSE_SWEEP_ENABLED      = true
+-- fishing state
+local fishState   = "IDLE"
+local isSpace     = false
+local lastSpTgl   = 0
+local biteStart   = 0
+local mgStart     = 0
+local mgLastSeen  = 0
+local mgEverSeen  = false
+local mgStarted   = false
+local successDone = false
+local isCasting   = false
+local wBar, rBar  = nil, nil
+local lastScan    = 0
+local lastWC      = nil
+local lastWTime   = os.clock()
+local wVel        = 0
+local castSession = 0
 
-local actionsSinceLastBreak = 0
-local nextBreakThreshold = math.random(10, 20)
+-- mining state
+local mineActive    = false
+local currentTarget = nil
+local failCount     = 0
+local hitCount      = 0
 
--- ==========================================
--- LOGGING SYSTEM
--- ==========================================
-local consoleLog = function() end
-local originalWarn = warn
+-- counters
+local fishCount = 0
+local mineCount = 0
 
-local function customWarn(msg)
-    originalWarn(msg)
-    if consoleLog then consoleLog(tostring(msg)) end
+-- console state (default OFF)
+local consoleOn   = false
+local _consLog    = function() end
+
+-- fatigue
+local fatCount = 0
+local fatNext  = math.random(12, 22)
+
+-- ============================================================
+-- LOGGING
+-- ============================================================
+local _warn = warn
+local function lg(msg)
+    _warn(msg)
+    if consoleOn then _consLog(tostring(msg)) end
 end
-warn = customWarn
-
-local function safeRun(f)
-    xpcall(f, function(e)
-        originalWarn("ERROR: " .. tostring(e))
-        if consoleLog then consoleLog("ERROR: " .. tostring(e)) end
+local function safe(fn)
+    local ok, e = xpcall(fn, function(err)
+        _warn("[ERR] " .. tostring(err))
+        if consoleOn then _consLog("[ERR] " .. tostring(err)) end
     end)
+    return ok
 end
 
--- ==========================================
--- CLEAR PREVIOUS UI INSTANCES
--- ==========================================
+-- bersihkan gui lama
 pcall(function()
-    for _, name in ipairs({"IH_v5", "AppleFarmUI"}) do
-        local cg = game:GetService("CoreGui"):FindFirstChild(name)
+    for _, n in ipairs({"NH_v9_GUI","AppleFarmUI","IH_v5"}) do
+        local cg = game:GetService("CoreGui"):FindFirstChild(n)
         if cg then cg:Destroy() end
-        local pg = player:FindFirstChild("PlayerGui") and player.PlayerGui:FindFirstChild(name)
-        if pg then pg:Destroy() end
+        if me.PlayerGui then
+            local pg = me.PlayerGui:FindFirstChild(n)
+            if pg then pg:Destroy() end
+        end
     end
 end)
 
+-- anti-fingerprint: delay acak kecil saat startup
+if CFG.antiFingerp then task.wait(math.random() * 0.25) end
+
+-- ============================================================
+-- GUI CORE
+-- ============================================================
 local gui = Instance.new("ScreenGui")
-gui.Name = "AppleFarmUI"
+gui.Name = "NH_v9_GUI"
 gui.ResetOnSpawn = false
+gui.DisplayOrder = 12
+local gok = pcall(function() gui.Parent = game:GetService("CoreGui") end)
+if not gok then gui.Parent = me:WaitForChild("PlayerGui") end
 
-local ok = pcall(function() gui.Parent = game:GetService("CoreGui") end)
-if not ok then
-    pcall(function() gui.Parent = player:WaitForChild("PlayerGui") end)
-end
-
--- ==========================================
--- APPLE GLASSMORPHIC DESIGN SYSTEM
--- ==========================================
 local main = Instance.new("Frame", gui)
-main.Size = UDim2.new(0, 310, 0, 340)
-main.Position = UDim2.new(1, -325, 0.2, 0)
-main.BackgroundColor3 = Color3.fromRGB(22, 22, 26)
-main.BackgroundTransparency = 0.18
+main.Name  = "Main"
+main.Size  = UDim2.new(0, 308, 0, 368)
+main.Position = UDim2.new(1, -324, 0.16, 0)
+main.BackgroundColor3 = Color3.fromRGB(17, 17, 21)
+main.BackgroundTransparency = 0.08
 main.BorderSizePixel = 0
 main.Active = true
 main.Draggable = true
-Instance.new("UICorner", main).CornerRadius = UDim.new(0, 12)
+Instance.new("UICorner", main).CornerRadius = UDim.new(0, 14)
+local mStroke = Instance.new("UIStroke", main)
+mStroke.Color = Color3.fromRGB(48, 48, 55)
+mStroke.Thickness = 1
 
-local mainStroke = Instance.new("UIStroke", main)
-mainStroke.Color = Color3.fromRGB(55, 55, 60)
-mainStroke.Thickness = 1
+-- header 56px untuk dua baris text
+local hdr = Instance.new("Frame", main)
+hdr.Size = UDim2.new(1, 0, 0, 56)
+hdr.BackgroundColor3 = Color3.fromRGB(22, 22, 27)
+hdr.BackgroundTransparency = 0.12
+hdr.BorderSizePixel = 0
+Instance.new("UICorner", hdr).CornerRadius = UDim.new(0, 14)
 
--- Sleek Apple-like Shadow Effect (using a secondary overlapping background)
-local shadowBg = Instance.new("Frame", main)
-shadowBg.Size = UDim2.new(1, 0, 1, 0)
-shadowBg.Position = UDim2.new(0, 0, 0, 0)
-shadowBg.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
-shadowBg.BackgroundTransparency = 0.95
-shadowBg.ZIndex = main.ZIndex - 1
-Instance.new("UICorner", shadowBg).CornerRadius = UDim.new(0, 12)
+local hdrLine = Instance.new("Frame", hdr)
+hdrLine.Size = UDim2.new(1, 0, 0, 1)
+hdrLine.Position = UDim2.new(0, 0, 1, -1)
+hdrLine.BackgroundColor3 = Color3.fromRGB(38, 38, 44)
+hdrLine.BorderSizePixel = 0
 
--- Header/Title Bar
-local titleBar = Instance.new("Frame", main)
-titleBar.Size = UDim2.new(1, 0, 0, 42)
-titleBar.BackgroundColor3 = Color3.fromRGB(28, 28, 32)
-titleBar.BackgroundTransparency = 0.2
-titleBar.BorderSizePixel = 0
-Instance.new("UICorner", titleBar).CornerRadius = UDim.new(0, 12)
+-- baris 1: "System Console"
+local titleLbl = Instance.new("TextLabel", hdr)
+titleLbl.Size = UDim2.new(1, -72, 0, 22)
+titleLbl.Position = UDim2.new(0, 14, 0, 7)
+titleLbl.BackgroundTransparency = 1
+titleLbl.Text = "System Console"
+titleLbl.TextColor3 = Color3.fromRGB(235, 235, 242)
+titleLbl.Font = Enum.Font.GothamBold
+titleLbl.TextSize = 14
+titleLbl.TextXAlignment = Enum.TextXAlignment.Left
 
-local titleDivider = Instance.new("Frame", titleBar)
-titleDivider.Size = UDim2.new(1, 0, 0, 1)
-titleDivider.Position = UDim2.new(0, 0, 1, -1)
-titleDivider.BackgroundColor3 = Color3.fromRGB(45, 45, 50)
-titleDivider.BorderSizePixel = 0
+-- baris 2: "by nazhan" — di bawah judul
+local byLbl = Instance.new("TextLabel", hdr)
+byLbl.Size = UDim2.new(1, -72, 0, 16)
+byLbl.Position = UDim2.new(0, 15, 0, 30)
+byLbl.BackgroundTransparency = 1
+byLbl.Text = "by nazhan"
+byLbl.TextColor3 = Color3.fromRGB(85, 85, 96)
+byLbl.Font = Enum.Font.Gotham
+byLbl.TextSize = 11
+byLbl.TextXAlignment = Enum.TextXAlignment.Left
 
-local titleLabel = Instance.new("TextLabel", titleBar)
-titleLabel.Size = UDim2.new(1, -60, 1, 0)
-titleLabel.Position = UDim2.new(0, 12, 0, 0)
-titleLabel.BackgroundTransparency = 1
-titleLabel.Text = "System Console"
-titleLabel.TextColor3 = Color3.fromRGB(240, 240, 245)
-titleLabel.Font = Enum.Font.GothamBold
-titleLabel.TextSize = 13
-titleLabel.TextXAlignment = Enum.TextXAlignment.Left
-
-local byLabel = Instance.new("TextLabel", titleBar)
-byLabel.Size = UDim2.new(0, 72, 1, 0)
-byLabel.Position = UDim2.new(0, 130, 0, 0)
-byLabel.BackgroundTransparency = 1
-byLabel.Text = "by nazhan"
-byLabel.TextColor3 = Color3.fromRGB(100, 100, 108)
-byLabel.Font = Enum.Font.Gotham
-byLabel.TextSize = 10
-byLabel.TextXAlignment = Enum.TextXAlignment.Left
-
--- Minimize/Hide Button
-local hideBtn = Instance.new("TextButton", titleBar)
-hideBtn.Size = UDim2.new(0, 45, 0, 20)
-hideBtn.Position = UDim2.new(1, -55, 0.5, -10)
-hideBtn.BackgroundTransparency = 1
-hideBtn.Text = "Minimize"
+-- tombol hide
+local hideBtn = Instance.new("TextButton", hdr)
+hideBtn.Size = UDim2.new(0, 50, 0, 22)
+hideBtn.Position = UDim2.new(1, -58, 0.5, -11)
+hideBtn.BackgroundColor3 = Color3.fromRGB(32, 32, 38)
+hideBtn.Text = "Hide"
+hideBtn.TextColor3 = Color3.fromRGB(150, 150, 158)
 hideBtn.Font = Enum.Font.GothamMedium
 hideBtn.TextSize = 11
-hideBtn.TextColor3 = Color3.fromRGB(150, 150, 155)
 hideBtn.BorderSizePixel = 0
+Instance.new("UICorner", hideBtn).CornerRadius = UDim.new(0, 6)
 
--- Floating Float Button for Restoring
+-- float button
 local floatBtn = Instance.new("TextButton", gui)
 floatBtn.Size = UDim2.new(0, 52, 0, 52)
-floatBtn.Position = UDim2.new(1, -65, 0.2, 0)
-floatBtn.BackgroundColor3 = Color3.fromRGB(24, 24, 28)
-floatBtn.BackgroundTransparency = 0.15
-floatBtn.Text = "Console"
+floatBtn.Position = UDim2.new(1, -66, 0.16, 0)
+floatBtn.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
+floatBtn.BackgroundTransparency = 0.08
+floatBtn.Text = "IH"
+floatBtn.TextColor3 = Color3.fromRGB(220, 220, 230)
 floatBtn.Font = Enum.Font.GothamBold
-floatBtn.TextSize = 10
-floatBtn.TextColor3 = Color3.fromRGB(240, 240, 245)
+floatBtn.TextSize = 14
 floatBtn.BorderSizePixel = 0
 floatBtn.Visible = false
 Instance.new("UICorner", floatBtn).CornerRadius = UDim.new(1, 0)
+local fbStr = Instance.new("UIStroke", floatBtn)
+fbStr.Color = Color3.fromRGB(50, 50, 58)
+fbStr.Thickness = 1
 
-local floatStroke = Instance.new("UIStroke", floatBtn)
-floatStroke.Color = Color3.fromRGB(60, 60, 65)
-floatStroke.Thickness = 1
+local mainPos   = UDim2.new(1, -324, 0.16, 0)
+local hidePos   = UDim2.new(1,  56,  0.16, 0)
+local isHid     = false
 
-local isMinimized = false
-local mainPosition = UDim2.new(1, -325, 0.2, 0)
-local minimizedPosition = UDim2.new(1, 50, 0.2, 0)
-
-local function setMinimizeState(minimized)
-    isMinimized = minimized
-    if minimized then
-        local tw = TweenService:Create(main, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Position = minimizedPosition})
-        tw:Play()
-        tw.Completed:Connect(function()
-            if isMinimized then
-                main.Visible = false
-                floatBtn.Visible = true
-            end
+local function setHide(h)
+    isHid = h
+    if h then
+        TS:Create(main, TweenInfo.new(0.26, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Position = hidePos}):Play()
+        task.delay(0.27, function()
+            if isHid then main.Visible = false; floatBtn.Visible = true end
         end)
     else
         main.Visible = true
         floatBtn.Visible = false
-        TweenService:Create(main, TweenInfo.new(0.3, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Position = mainPosition}):Play()
+        TS:Create(main, TweenInfo.new(0.26, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Position = mainPos}):Play()
     end
 end
 
-hideBtn.MouseButton1Click:Connect(function() setMinimizeState(true) end)
-floatBtn.MouseButton1Click:Connect(function() setMinimizeState(false) end)
+hideBtn.MouseButton1Click:Connect(function() setHide(true) end)
+floatBtn.MouseButton1Click:Connect(function() setHide(false) end)
 
--- ==========================================
--- NAVIGATION BAR (TAB SYSTEM)
--- ==========================================
-local navBar = Instance.new("Frame", main)
-navBar.Size = UDim2.new(1, 0, 0, 36)
-navBar.Position = UDim2.new(0, 0, 0, 42)
-navBar.BackgroundColor3 = Color3.fromRGB(24, 24, 28)
-navBar.BackgroundTransparency = 0.3
-navBar.BorderSizePixel = 0
+-- ============================================================
+-- TAB BAR
+-- ============================================================
+local tabBar = Instance.new("Frame", main)
+tabBar.Size = UDim2.new(1, 0, 0, 34)
+tabBar.Position = UDim2.new(0, 0, 0, 56)
+tabBar.BackgroundColor3 = Color3.fromRGB(20, 20, 24)
+tabBar.BackgroundTransparency = 0.18
+tabBar.BorderSizePixel = 0
 
-local navDivider = Instance.new("Frame", navBar)
-navDivider.Size = UDim2.new(1, 0, 0, 1)
-navDivider.Position = UDim2.new(0, 0, 1, -1)
-navDivider.BackgroundColor3 = Color3.fromRGB(40, 40, 45)
-navDivider.BorderSizePixel = 0
+local tabLine = Instance.new("Frame", tabBar)
+tabLine.Size = UDim2.new(0.25, 0, 0, 2)
+tabLine.Position = UDim2.new(0, 0, 1, -2)
+tabLine.BackgroundColor3 = Color3.fromRGB(0, 118, 255)
+tabLine.BorderSizePixel = 0
+Instance.new("UICorner", tabLine).CornerRadius = UDim.new(1, 0)
 
-local navUnderline = Instance.new("Frame", navBar)
-navUnderline.Size = UDim2.new(0.25, 0, 0, 2)
-navUnderline.Position = UDim2.new(0, 0, 1, -2)
-navUnderline.BackgroundColor3 = Color3.fromRGB(0, 122, 255)
-navUnderline.BorderSizePixel = 0
+local tabDivLine = Instance.new("Frame", tabBar)
+tabDivLine.Size = UDim2.new(1, 0, 0, 1)
+tabDivLine.Position = UDim2.new(0, 0, 1, -1)
+tabDivLine.BackgroundColor3 = Color3.fromRGB(36, 36, 42)
+tabDivLine.BorderSizePixel = 0
 
-local tabNames = {"Fishing", "Mining", "Settings", "Console"}
-local tabButtons = {}
-local panels = {}
-local activeTab = "Fishing"
+local TABS    = {"Fishing","Mining","Settings","Console"}
+local tabBtns = {}
+local panels  = {}
+local currTab = "Fishing"
 
-for i, tabName in ipairs(tabNames) do
-    local btn = Instance.new("TextButton", navBar)
+local content = Instance.new("Frame", main)
+content.Size = UDim2.new(1, 0, 1, -90)
+content.Position = UDim2.new(0, 0, 0, 90)
+content.BackgroundTransparency = 1
+
+for i, tname in ipairs(TABS) do
+    local btn = Instance.new("TextButton", tabBar)
     btn.Size = UDim2.new(0.25, 0, 1, -2)
-    btn.Position = UDim2.new((i - 1) * 0.25, 0, 0, 0)
+    btn.Position = UDim2.new((i-1)*0.25, 0, 0, 0)
     btn.BackgroundTransparency = 1
-    btn.Text = tabName
-    btn.TextColor3 = (i == 1) and Color3.fromRGB(240, 240, 245) or Color3.fromRGB(140, 140, 145)
+    btn.Text = tname
+    btn.TextColor3 = i == 1 and Color3.fromRGB(232,232,240) or Color3.fromRGB(125,125,134)
     btn.Font = Enum.Font.GothamMedium
     btn.TextSize = 11
     btn.BorderSizePixel = 0
-    tabButtons[tabName] = btn
-end
+    tabBtns[tname] = btn
 
--- ==========================================
--- TAB CONTENT PANELS
--- ==========================================
-local contentContainer = Instance.new("Frame", main)
-contentContainer.Size = UDim2.new(1, 0, 1, -78)
-contentContainer.Position = UDim2.new(0, 0, 0, 78)
-contentContainer.BackgroundTransparency = 1
-
-local function createPanel(name, visible)
-    local panel = Instance.new("Frame", contentContainer)
+    local panel = Instance.new("Frame", content)
     panel.Size = UDim2.new(1, 0, 1, 0)
     panel.BackgroundTransparency = 1
-    panel.Visible = visible
-    panels[name] = panel
-    return panel
+    panel.Visible = i == 1
+    panels[tname] = panel
 end
 
-local fishingPanel  = createPanel("Fishing", true)
-local miningPanel   = createPanel("Mining", false)
-local settingsPanel = createPanel("Settings", false)
-local consolePanel  = createPanel("Console", false)
-
-local function switchTab(tabName)
-    activeTab = tabName
-    local index = table.find(tabNames, tabName)
-    local targetPos = UDim2.new((index - 1) * 0.25, 0, 1, -2)
-    TweenService:Create(navUnderline, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Position = targetPos}):Play()
-    
-    for name, btn in pairs(tabButtons) do
-        local isActive = (name == tabName)
-        btn.TextColor3 = isActive and Color3.fromRGB(240, 240, 245) or Color3.fromRGB(140, 140, 145)
-        if panels[name] then
-            panels[name].Visible = isActive
-        end
+local function switchTab(name)
+    currTab = name
+    local idx = table.find(TABS, name)
+    TS:Create(tabLine, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {
+        Position = UDim2.new((idx-1)*0.25, 0, 1, -2)
+    }):Play()
+    for n, btn in pairs(tabBtns) do
+        btn.TextColor3 = n == name and Color3.fromRGB(232,232,240) or Color3.fromRGB(125,125,134)
+        panels[n].Visible = n == name
     end
 end
-
-for name, btn in pairs(tabButtons) do
+for name, btn in pairs(tabBtns) do
     btn.MouseButton1Click:Connect(function() switchTab(name) end)
 end
 
--- ==========================================
--- APPLE CAPSULE SWITCH COMPONENT
--- ==========================================
-local function createToggle(parent, labelText, yPos, defaultValue, onClick)
-    local frame = Instance.new("Frame", parent)
-    frame.Size = UDim2.new(1, -24, 0, 32)
-    frame.Position = UDim2.new(0, 12, 0, yPos)
-    frame.BackgroundTransparency = 1
-
-    local label = Instance.new("TextLabel", frame)
-    label.Size = UDim2.new(0.65, 0, 1, 0)
-    label.BackgroundTransparency = 1
-    label.Text = labelText
-    label.TextColor3 = Color3.fromRGB(210, 210, 215)
-    label.Font = Enum.Font.GothamMedium
-    label.TextSize = 12
-    label.TextXAlignment = Enum.TextXAlignment.Left
-
-    local switch = Instance.new("TextButton", frame)
-    switch.Size = UDim2.new(0, 42, 0, 22)
-    switch.Position = UDim2.new(1, -42, 0.5, -11)
-    switch.BackgroundColor3 = defaultValue and Color3.fromRGB(52, 199, 89) or Color3.fromRGB(60, 60, 65)
-    switch.Text = ""
-    switch.BorderSizePixel = 0
-    Instance.new("UICorner", switch).CornerRadius = UDim.new(1, 0)
-
-    local thumb = Instance.new("Frame", switch)
-    thumb.Size = UDim2.new(0, 18, 0, 18)
-    thumb.Position = defaultValue and UDim2.new(1, -20, 0.5, -9) or UDim2.new(0, 2, 0.5, -9)
-    thumb.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
-    thumb.BorderSizePixel = 0
-    Instance.new("UICorner", thumb).CornerRadius = UDim.new(1, 0)
-
-    local active = defaultValue
-    switch.MouseButton1Click:Connect(function()
-        if not InstanceManager.Active then return end
-        active = not active
-        local targetPos = active and UDim2.new(1, -20, 0.5, -9) or UDim2.new(0, 2, 0.5, -9)
-        local targetColor = active and Color3.fromRGB(52, 199, 89) or Color3.fromRGB(60, 60, 65)
-        
-        TweenService:Create(thumb, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Position = targetPos}):Play()
-        TweenService:Create(switch, TweenInfo.new(0.18, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {BackgroundColor3 = targetColor}):Play()
-        
-        onClick(active)
-    end)
-    return switch, frame
+-- ============================================================
+-- GUI HELPERS
+-- ============================================================
+local function mkSep(parent, y)
+    local s = Instance.new("Frame", parent)
+    s.Size = UDim2.new(1, -22, 0, 1)
+    s.Position = UDim2.new(0, 11, 0, y)
+    s.BackgroundColor3 = Color3.fromRGB(36, 36, 42)
+    s.BorderSizePixel = 0
+    return s
 end
 
--- ==========================================
--- TEXT FIELD & OPTION ROW BUILDERS
--- ==========================================
-local function createTextField(parent, labelText, yPos, defaultValue, onFocusLost)
-    local frame = Instance.new("Frame", parent)
-    frame.Size = UDim2.new(1, -24, 0, 32)
-    frame.Position = UDim2.new(0, 12, 0, yPos)
-    frame.BackgroundTransparency = 1
-
-    local label = Instance.new("TextLabel", frame)
-    label.Size = UDim2.new(0.6, 0, 1, 0)
-    label.BackgroundTransparency = 1
-    label.Text = labelText
-    label.TextColor3 = Color3.fromRGB(210, 210, 215)
-    label.Font = Enum.Font.GothamMedium
-    label.TextSize = 12
-    label.TextXAlignment = Enum.TextXAlignment.Left
-
-    local box = Instance.new("TextBox", frame)
-    box.Size = UDim2.new(0, 68, 0, 22)
-    box.Position = UDim2.new(1, -72, 0.5, -11)
-    box.BackgroundColor3 = Color3.fromRGB(36, 36, 40)
-    box.TextColor3 = Color3.fromRGB(240, 240, 245)
-    box.Text = defaultValue
-    box.ClearTextOnFocus = false
-    box.Font = Enum.Font.Gotham
-    box.TextSize = 11
-    box.BorderSizePixel = 0
-    box.TextXAlignment = Enum.TextXAlignment.Center
-    Instance.new("UICorner", box).CornerRadius = UDim.new(0, 5)
-    
-    local stroke = Instance.new("UIStroke", box)
-    stroke.Color = Color3.fromRGB(70, 70, 80)
-    stroke.Thickness = 1
-
-    box.FocusLost:Connect(function(enterPressed)
-        onFocusLost(box.Text, box)
-    end)
-    return box, frame
+local function mkLbl(parent, text, y, sz, color)
+    local l = Instance.new("TextLabel", parent)
+    l.Size = UDim2.new(1, -22, 0, 18)
+    l.Position = UDim2.new(0, 11, 0, y)
+    l.BackgroundTransparency = 1
+    l.Text = text
+    l.TextColor3 = color or Color3.fromRGB(135,135,144)
+    l.Font = Enum.Font.GothamMedium
+    l.TextSize = sz or 12
+    l.TextXAlignment = Enum.TextXAlignment.Left
+    return l
 end
 
-local function createStatusAndStats(parent)
-    local statusLbl = Instance.new("TextLabel", parent)
-    statusLbl.Size = UDim2.new(1, -24, 0, 20)
-    statusLbl.Position = UDim2.new(0, 12, 0, 12)
-    statusLbl.BackgroundTransparency = 1
-    statusLbl.Text = "Status: Idle"
-    statusLbl.TextColor3 = Color3.fromRGB(150, 150, 155)
-    statusLbl.Font = Enum.Font.GothamMedium
-    statusLbl.TextSize = 12
-    statusLbl.TextXAlignment = Enum.TextXAlignment.Left
+local function mkToggle(parent, label, y, def, cb)
+    local row = Instance.new("Frame", parent)
+    row.Size = UDim2.new(1, -22, 0, 30)
+    row.Position = UDim2.new(0, 11, 0, y)
+    row.BackgroundTransparency = 1
 
-    local statsLbl = Instance.new("TextLabel", parent)
-    statsLbl.Size = UDim2.new(1, -24, 0, 20)
-    statsLbl.Position = UDim2.new(0, 12, 0, 32)
-    statsLbl.BackgroundTransparency = 1
-    statsLbl.Text = "Activity Count: 0"
-    statsLbl.TextColor3 = Color3.fromRGB(150, 150, 155)
-    statsLbl.Font = Enum.Font.GothamMedium
-    statsLbl.TextSize = 12
-    statsLbl.TextXAlignment = Enum.TextXAlignment.Left
-
-    return statusLbl, statsLbl
-end
-
--- ==========================================
--- FISHING PANEL GUI
--- ==========================================
-local fishStatus, fishStats = createStatusAndStats(fishingPanel)
-
--- Sleek Horizontal Step Progress Bar for Fishing Phase
-local stepContainer = Instance.new("Frame", fishingPanel)
-stepContainer.Size = UDim2.new(1, -24, 0, 4)
-stepContainer.Position = UDim2.new(0, 12, 0, 70)
-stepContainer.BackgroundColor3 = Color3.fromRGB(40, 40, 45)
-stepContainer.BorderSizePixel = 0
-Instance.new("UICorner", stepContainer).CornerRadius = UDim.new(1, 0)
-
-local timerFill = Instance.new("Frame", stepContainer)
-timerFill.Size = UDim2.new(0, 0, 1, 0)
-timerFill.BackgroundColor3 = Color3.fromRGB(0, 122, 255)
-timerFill.BorderSizePixel = 0
-Instance.new("UICorner", timerFill).CornerRadius = UDim.new(1, 0)
-
-local phaseNames = {"Cast", "Wait", "Game", "Done"}
-local phaseColors = {
-    Color3.fromRGB(0, 122, 255),
-    Color3.fromRGB(255, 149, 0),
-    Color3.fromRGB(255, 45, 85),
-    Color3.fromRGB(52, 199, 89)
-}
-local phaseLabels = {}
-
-for i = 1, 4 do
-    local lbl = Instance.new("TextLabel", fishingPanel)
-    lbl.Size = UDim2.new(0.25, 0, 0, 18)
-    lbl.Position = UDim2.new((i - 1) * 0.25 + 0.02, 0, 0, 78)
+    local lbl = Instance.new("TextLabel", row)
+    lbl.Size = UDim2.new(0.62, 0, 1, 0)
     lbl.BackgroundTransparency = 1
-    lbl.Text = phaseNames[i]
-    lbl.TextColor3 = Color3.fromRGB(90, 90, 95)
+    lbl.Text = label
+    lbl.TextColor3 = Color3.fromRGB(196,196,206)
     lbl.Font = Enum.Font.GothamMedium
-    lbl.TextSize = 10
-    phaseLabels[i] = lbl
+    lbl.TextSize = 12
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+
+    local sw = Instance.new("TextButton", row)
+    sw.Size = UDim2.new(0, 40, 0, 21)
+    sw.Position = UDim2.new(1, -40, 0.5, -10)
+    sw.BackgroundColor3 = def and Color3.fromRGB(46,188,82) or Color3.fromRGB(55,55,62)
+    sw.Text = ""
+    sw.BorderSizePixel = 0
+    Instance.new("UICorner", sw).CornerRadius = UDim.new(1, 0)
+
+    local th = Instance.new("Frame", sw)
+    th.Size = UDim2.new(0, 17, 0, 17)
+    th.Position = def and UDim2.new(1,-19,0.5,-8.5) or UDim2.new(0,2,0.5,-8.5)
+    th.BackgroundColor3 = Color3.fromRGB(255,255,255)
+    th.BorderSizePixel = 0
+    Instance.new("UICorner", th).CornerRadius = UDim.new(1, 0)
+
+    local active = def
+    sw.MouseButton1Click:Connect(function()
+        if not Manager.alive then return end
+        active = not active
+        TS:Create(th, TweenInfo.new(0.15), {
+            Position = active and UDim2.new(1,-19,0.5,-8.5) or UDim2.new(0,2,0.5,-8.5)
+        }):Play()
+        TS:Create(sw, TweenInfo.new(0.15), {
+            BackgroundColor3 = active and Color3.fromRGB(46,188,82) or Color3.fromRGB(55,55,62)
+        }):Play()
+        cb(active)
+    end)
+    return sw, th
 end
 
-local activeFishPhase = -1
-local function setFishPhase(phaseIdx)
-    activeFishPhase = phaseIdx
+-- ============================================================
+-- FISHING PANEL
+-- ============================================================
+local fp = panels["Fishing"]
+
+local fishStatLbl  = mkLbl(fp, "Status: Idle", 10, 12, Color3.fromRGB(135,135,144))
+local fishCntLbl   = mkLbl(fp, "Fish Caught: 0", 28, 11)
+
+-- progress bar
+local pbBg = Instance.new("Frame", fp)
+pbBg.Size = UDim2.new(1, -22, 0, 4)
+pbBg.Position = UDim2.new(0, 11, 0, 54)
+pbBg.BackgroundColor3 = Color3.fromRGB(36, 36, 42)
+pbBg.BorderSizePixel = 0
+Instance.new("UICorner", pbBg).CornerRadius = UDim.new(1, 0)
+
+local pbFill = Instance.new("Frame", pbBg)
+pbFill.Size = UDim2.new(0, 0, 1, 0)
+pbFill.BackgroundColor3 = Color3.fromRGB(0, 118, 255)
+pbFill.BorderSizePixel = 0
+Instance.new("UICorner", pbFill).CornerRadius = UDim.new(1, 0)
+
+local phaseNm  = {"Cast","Wait","Game","Done"}
+local phaseCl  = {Color3.fromRGB(0,118,255), Color3.fromRGB(255,148,0), Color3.fromRGB(255,48,80), Color3.fromRGB(46,188,82)}
+local phaseLbs = {}
+for i = 1, 4 do
+    local l = Instance.new("TextLabel", fp)
+    l.Size = UDim2.new(0.25, 0, 0, 16)
+    l.Position = UDim2.new((i-1)*0.25 + 0.013, 0, 0, 60)
+    l.BackgroundTransparency = 1
+    l.Text = phaseNm[i]
+    l.TextColor3 = Color3.fromRGB(76,76,84)
+    l.Font = Enum.Font.GothamMedium
+    l.TextSize = 10
+    phaseLbs[i] = l
+end
+
+local activePhase = 0
+local function setPhase(ph)
+    activePhase = ph
     for i = 1, 4 do
-        if i == phaseIdx then
-            phaseLabels[i].TextColor3 = phaseColors[i]
-        elseif i < phaseIdx then
-            phaseLabels[i].TextColor3 = Color3.fromRGB(150, 150, 155)
+        if i < ph then
+            phaseLbs[i].TextColor3 = Color3.fromRGB(145,145,154)
+        elseif i == ph then
+            phaseLbs[i].TextColor3 = phaseCl[i]
         else
-            phaseLabels[i].TextColor3 = Color3.fromRGB(80, 80, 85)
+            phaseLbs[i].TextColor3 = Color3.fromRGB(74,74,82)
         end
     end
-    if phaseIdx == 0 then
-        TweenService:Create(timerFill, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Size = UDim2.new(0, 0, 1, 0)}):Play()
+    if ph == 0 then
+        TS:Create(pbFill, TweenInfo.new(0.18), {Size = UDim2.new(0,0,1,0), BackgroundColor3 = Color3.fromRGB(0,118,255)}):Play()
     else
-        local targetWidth = phaseIdx * 0.25
-        TweenService:Create(timerFill, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {
-            Size = UDim2.new(targetWidth, 0, 1, 0),
-            BackgroundColor3 = phaseColors[phaseIdx]
+        TS:Create(pbFill, TweenInfo.new(0.18), {
+            Size = UDim2.new(math.clamp(ph*0.25,0,1), 0, 1, 0),
+            BackgroundColor3 = phaseCl[ph]
         }):Play()
     end
 end
 
-local function updateTimerFill(fraction)
-    if activeFishPhase <= 0 then return end
-    local baseWidth = (activeFishPhase - 1) * 0.25
-    local currentStepWidth = fraction * 0.25
-    timerFill.Size = UDim2.new(math.clamp(baseWidth + currentStepWidth, 0, 1), 0, 1, 0)
+local function setPBar(frac)
+    if activePhase <= 0 then return end
+    local base = (activePhase-1)*0.25
+    pbFill.Size = UDim2.new(math.clamp(base + frac*0.25, 0, 1), 0, 1, 0)
 end
 
-local forceTurnOffFish
-local toggleFish
-toggleFish = createToggle(fishingPanel, "Fishing System", 115, false, function(active)
-    if active then
+mkSep(fp, 82)
+
+-- rod selector
+local rodBox = Instance.new("Frame", fp)
+rodBox.Size = UDim2.new(1, -22, 0, 50)
+rodBox.Position = UDim2.new(0, 11, 0, 88)
+rodBox.BackgroundColor3 = Color3.fromRGB(24, 24, 29)
+rodBox.BorderSizePixel = 0
+Instance.new("UICorner", rodBox).CornerRadius = UDim.new(0, 9)
+local rbStr = Instance.new("UIStroke", rodBox)
+rbStr.Color = Color3.fromRGB(40, 40, 47)
+rbStr.Thickness = 1
+
+local rodHdrLbl = Instance.new("TextLabel", rodBox)
+rodHdrLbl.Size = UDim2.new(1, 0, 0, 16)
+rodHdrLbl.Position = UDim2.new(0, 10, 0, 4)
+rodHdrLbl.BackgroundTransparency = 1
+rodHdrLbl.Text = "Rod Selection"
+rodHdrLbl.TextColor3 = Color3.fromRGB(85, 85, 96)
+rodHdrLbl.Font = Enum.Font.GothamMedium
+rodHdrLbl.TextSize = 10
+rodHdrLbl.TextXAlignment = Enum.TextXAlignment.Left
+
+local prevRodBtn = Instance.new("TextButton", rodBox)
+prevRodBtn.Size = UDim2.new(0, 24, 0, 22)
+prevRodBtn.Position = UDim2.new(0, 6, 1, -28)
+prevRodBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 36)
+prevRodBtn.Text = "<"
+prevRodBtn.TextColor3 = Color3.fromRGB(175,175,184)
+prevRodBtn.Font = Enum.Font.GothamBold
+prevRodBtn.TextSize = 13
+prevRodBtn.BorderSizePixel = 0
+Instance.new("UICorner", prevRodBtn).CornerRadius = UDim.new(0, 5)
+
+local nextRodBtn = Instance.new("TextButton", rodBox)
+nextRodBtn.Size = UDim2.new(0, 24, 0, 22)
+nextRodBtn.Position = UDim2.new(1, -30, 1, -28)
+nextRodBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 36)
+nextRodBtn.Text = ">"
+nextRodBtn.TextColor3 = Color3.fromRGB(175,175,184)
+nextRodBtn.Font = Enum.Font.GothamBold
+nextRodBtn.TextSize = 13
+nextRodBtn.BorderSizePixel = 0
+Instance.new("UICorner", nextRodBtn).CornerRadius = UDim.new(0, 5)
+
+local rodNameLbl = Instance.new("TextLabel", rodBox)
+rodNameLbl.Size = UDim2.new(1, -64, 0, 22)
+rodNameLbl.Position = UDim2.new(0, 36, 1, -28)
+rodNameLbl.BackgroundTransparency = 1
+rodNameLbl.Text = RODS[1].name
+rodNameLbl.TextColor3 = Color3.fromRGB(218,218,228)
+rodNameLbl.Font = Enum.Font.GothamMedium
+rodNameLbl.TextSize = 12
+
+local rodStatLbl = mkLbl(fp, "Lure: 100%  |  Progress: 100%", 142, 10, Color3.fromRGB(82,82,92))
+
+local function updateRod()
+    local r = RODS[selectedRod]
+    rodNameLbl.Text = r.name
+    rodStatLbl.Text = string.format("Lure: %d%%  |  Progress: %d%%", math.floor(r.lure*100), math.floor(r.prog*100))
+end
+
+prevRodBtn.MouseButton1Click:Connect(function()
+    selectedRod = selectedRod <= 1 and #RODS or selectedRod - 1
+    updateRod()
+    lg("[FISH] Rod: " .. RODS[selectedRod].name)
+end)
+nextRodBtn.MouseButton1Click:Connect(function()
+    selectedRod = selectedRod >= #RODS and 1 or selectedRod + 1
+    updateRod()
+    lg("[FISH] Rod: " .. RODS[selectedRod].name)
+end)
+
+mkSep(fp, 162)
+
+-- fishing toggle
+local fishSw, fishTh = mkToggle(fp, "Fishing System", 168, false, function(on)
+    if on then
         if mode == "MINE" then
-            pcall(function() shared.MineToggleFunction(false) end)
+            mode = "OFF"
         end
         mode = "FISH"
-        setFishPhase(0)
-        fishStatus.Text = "Status: Active"
-        warn("[SYSTEM] Fishing mode activated")
+        fishState = "IDLE"
+        fishStatLbl.Text = "Status: Starting"
+        lg("[FISH] Activated")
     else
-        forceTurnOffFish()
+        mode = "OFF"
+        fishStatLbl.Text = "Status: Idle"
+        isSpace = false
+        pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.Space, false, game) end)
+        setPhase(0)
+        lg("[FISH] Deactivated")
     end
 end)
-shared.FishToggleFunction = function(state)
-    local targetPos = state and UDim2.new(1, -20, 0.5, -9) or UDim2.new(0, 2, 0.5, -9)
-    local targetColor = state and Color3.fromRGB(52, 199, 89) or Color3.fromRGB(60, 60, 65)
-    local thumb = toggleFish:FindFirstChildOfClass("Frame")
-    if thumb then thumb.Position = targetPos end
-    toggleFish.BackgroundColor3 = targetColor
-    if not state then forceTurnOffFish() end
+
+-- reset button
+local rstBtn = Instance.new("TextButton", fp)
+rstBtn.Size = UDim2.new(0, 76, 0, 22)
+rstBtn.Position = UDim2.new(1, -88, 0, 200)
+rstBtn.BackgroundColor3 = Color3.fromRGB(30, 30, 37)
+rstBtn.Text = "Reset"
+rstBtn.TextColor3 = Color3.fromRGB(165,165,174)
+rstBtn.Font = Enum.Font.GothamMedium
+rstBtn.TextSize = 11
+rstBtn.BorderSizePixel = 0
+Instance.new("UICorner", rstBtn).CornerRadius = UDim.new(0, 6)
+local rstStr = Instance.new("UIStroke", rstBtn)
+rstStr.Color = Color3.fromRGB(46, 46, 53)
+rstStr.Thickness = 1
+
+rstBtn.MouseButton1Click:Connect(function()
+    fishState   = "IDLE"
+    isSpace     = false
+    isCasting   = false
+    successDone = false
+    mgEverSeen  = false
+    mgStarted   = false
+    wBar        = nil
+    rBar        = nil
+    lastScan    = 0
+    lastWC      = nil
+    wVel        = 0
+    mgLastSeen  = 0
+    castSession = castSession + 1
+    pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.Space, false, game) end)
+    pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game) end)
+    setPhase(0)
+    fishStatLbl.Text = "Status: Reset"
+    lg("[FISH] Manual reset")
+    task.delay(0.6, function()
+        if mode == "FISH" then fishStatLbl.Text = "Status: Idle" end
+    end)
+end)
+
+-- ============================================================
+-- MINING PANEL
+-- ============================================================
+local mp = panels["Mining"]
+
+local mineStatLbl = mkLbl(mp, "Status: Idle", 10, 12, Color3.fromRGB(135,135,144))
+local mineCntLbl  = mkLbl(mp, "Crystals Mined: 0", 28, 11)
+
+mkSep(mp, 52)
+
+-- stop range field
+local function mkNumRow(parent, label, y, defVal, minV, maxV, onChange)
+    local row = Instance.new("Frame", parent)
+    row.Size = UDim2.new(1, -22, 0, 30)
+    row.Position = UDim2.new(0, 11, 0, y)
+    row.BackgroundTransparency = 1
+
+    local lbl = Instance.new("TextLabel", row)
+    lbl.Size = UDim2.new(0.6, 0, 1, 0)
+    lbl.BackgroundTransparency = 1
+    lbl.Text = label
+    lbl.TextColor3 = Color3.fromRGB(196,196,206)
+    lbl.Font = Enum.Font.GothamMedium
+    lbl.TextSize = 12
+    lbl.TextXAlignment = Enum.TextXAlignment.Left
+
+    local box = Instance.new("TextBox", row)
+    box.Size = UDim2.new(0, 74, 0, 22)
+    box.Position = UDim2.new(1, -78, 0.5, -11)
+    box.BackgroundColor3 = Color3.fromRGB(26, 26, 32)
+    box.TextColor3 = Color3.fromRGB(228,228,238)
+    box.Text = tostring(defVal)
+    box.ClearTextOnFocus = false
+    box.Font = Enum.Font.Gotham
+    box.TextSize = 12
+    box.TextXAlignment = Enum.TextXAlignment.Center
+    box.BorderSizePixel = 0
+    Instance.new("UICorner", box).CornerRadius = UDim.new(0, 6)
+    local bs = Instance.new("UIStroke", box)
+    bs.Color = Color3.fromRGB(46,46,54)
+    bs.Thickness = 1
+
+    box.FocusLost:Connect(function()
+        local v = tonumber(box.Text)
+        if v then
+            v = math.clamp(v, minV, maxV)
+            box.Text = string.format("%.1f", v)
+            onChange(v)
+        else
+            box.Text = string.format("%.1f", defVal)
+        end
+    end)
+    return box
 end
 
--- ==========================================
--- MINING PANEL GUI
--- ==========================================
-local mineStatus, mineStats = createStatusAndStats(miningPanel)
+mkNumRow(mp, "Mine Stop Range", 58, STOP_DIST, 1.5, 6.0, function(v)
+    STOP_DIST = v
+    lg("[MINE] Stop range: " .. v)
+end)
 
-local toggleMine
-toggleMine = createToggle(miningPanel, "Mining System", 70, false, function(active)
-    if active then
+-- walk speed button
+local speedRow = Instance.new("Frame", mp)
+speedRow.Size = UDim2.new(1, -22, 0, 30)
+speedRow.Position = UDim2.new(0, 11, 0, 92)
+speedRow.BackgroundTransparency = 1
+
+local spLbl = Instance.new("TextLabel", speedRow)
+spLbl.Size = UDim2.new(0.6, 0, 1, 0)
+spLbl.BackgroundTransparency = 1
+spLbl.Text = "Walk / Sprint Speed"
+spLbl.TextColor3 = Color3.fromRGB(196,196,206)
+spLbl.Font = Enum.Font.GothamMedium
+spLbl.TextSize = 12
+spLbl.TextXAlignment = Enum.TextXAlignment.Left
+
+local spBtn = Instance.new("TextButton", speedRow)
+spBtn.Size = UDim2.new(0, 88, 0, 22)
+spBtn.Position = UDim2.new(1, -92, 0.5, -11)
+spBtn.BackgroundColor3 = Color3.fromRGB(26, 26, 32)
+spBtn.TextColor3 = Color3.fromRGB(228,228,238)
+spBtn.Text = "Sprint: 24"
+spBtn.Font = Enum.Font.GothamMedium
+spBtn.TextSize = 11
+spBtn.BorderSizePixel = 0
+Instance.new("UICorner", spBtn).CornerRadius = UDim.new(0, 6)
+local spStr = Instance.new("UIStroke", spBtn)
+spStr.Color = Color3.fromRGB(46,46,54)
+spStr.Thickness = 1
+
+local speedCycle = {{16,"Walk: 16"},{20,"Jog: 20"},{24,"Sprint: 24"}}
+local speedIdx   = 3
+spBtn.MouseButton1Click:Connect(function()
+    speedIdx   = speedIdx % #speedCycle + 1
+    WALK_SPEED = speedCycle[speedIdx][1]
+    spBtn.Text = speedCycle[speedIdx][2]
+    lg("[MINE] Speed: " .. WALK_SPEED)
+end)
+
+mkSep(mp, 128)
+
+mkToggle(mp, "Smooth Movement", 134, true, function(v)
+    CFG.smoothMove = v
+    lg("[MINE] Smooth: " .. tostring(v))
+end)
+
+mkSep(mp, 170)
+
+local mineSw, mineTh = mkToggle(mp, "Mining System", 176, false, function(on)
+    if on then
         if mode == "FISH" then
-            pcall(function() shared.FishToggleFunction(false) end)
+            mode = "OFF"
+            setPhase(0)
+            fishStatLbl.Text = "Status: Idle"
         end
         mode = "MINE"
-        currentMiningTarget = nil
-        miningFailCount = 0
-        miningHitCount = 0
-        mineStatus.Text = "Status: Active"
-        warn("[SYSTEM] Mining mode activated")
-        if not miningActive then
-            task.spawn(function()
-                local ok, f = pcall(function() return shared.MineRoutineFunction end)
-                if ok and f then f() end
-            end)
+        currentTarget = nil
+        failCount = 0; hitCount = 0
+        mineStatLbl.Text = "Status: Active"
+        lg("[MINE] Activated")
+        if not mineActive then
+            task.spawn(mineRoutine)
         end
     else
         mode = "OFF"
-        mineStatus.Text = "Status: Idle"
+        mineStatLbl.Text = "Status: Idle"
         pcall(function()
-            local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
-            if hum then hum:SetStateEnabled(Enum.HumanoidStateType.Jumping, true) end
-            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game)
+            local h = me.Character and me.Character:FindFirstChildOfClass("Humanoid")
+            if h then h:SetStateEnabled(Enum.HumanoidStateType.Jumping, true) end
+            VIM:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game)
         end)
-        warn("[SYSTEM] Mining mode deactivated")
-    end
-end)
-shared.MineToggleFunction = function(state)
-    local targetPos = state and UDim2.new(1, -20, 0.5, -9) or UDim2.new(0, 2, 0.5, -9)
-    local targetColor = state and Color3.fromRGB(52, 199, 89) or Color3.fromRGB(60, 60, 65)
-    local thumb = toggleMine:FindFirstChildOfClass("Frame")
-    if thumb then thumb.Position = targetPos end
-    toggleMine.BackgroundColor3 = targetColor
-    if not state then
-        mode = "OFF"
-        mineStatus.Text = "Status: Idle"
-        pcall(function()
-            local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
-            if hum then hum:SetStateEnabled(Enum.HumanoidStateType.Jumping, true) end
-            VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game)
-        end)
-    end
-end
-
--- ==========================================
--- SETTINGS PANEL GUI
--- ==========================================
-local settingsScroll = Instance.new("ScrollingFrame", settingsPanel)
-settingsScroll.Size = UDim2.new(1, 0, 1, -10)
-settingsScroll.Position = UDim2.new(0, 0, 0, 5)
-settingsScroll.BackgroundTransparency = 1
-settingsScroll.CanvasSize = UDim2.new(0, 0, 0, 280)
-settingsScroll.ScrollBarThickness = 2
-settingsScroll.ScrollBarImageColor3 = Color3.fromRGB(70, 70, 75)
-
-createTextField(settingsScroll, "Mine Stop Range", 10, string.format("%.1f", MINE_STOP_DISTANCE), function(text)
-    local val = tonumber(text)
-    if val then
-        MINE_STOP_DISTANCE = math.clamp(val, 1.8, 5.0)
-        warn("[CONFIG] Mine Stop Range updated to: " .. MINE_STOP_DISTANCE)
+        lg("[MINE] Deactivated")
     end
 end)
 
-local speedRowFrame = Instance.new("Frame", settingsScroll)
-speedRowFrame.Size = UDim2.new(1, -24, 0, 32)
-speedRowFrame.Position = UDim2.new(0, 12, 0, 45)
-speedRowFrame.BackgroundTransparency = 1
+-- ============================================================
+-- SETTINGS PANEL
+-- ============================================================
+local stp  = panels["Settings"]
+local stY  = 10
 
-local speedLabel = Instance.new("TextLabel", speedRowFrame)
-speedLabel.Size = UDim2.new(0.6, 0, 1, 0)
-speedLabel.BackgroundTransparency = 1
-speedLabel.Text = "Walk / Sprint Speed"
-speedLabel.TextColor3 = Color3.fromRGB(210, 210, 215)
-speedLabel.Font = Enum.Font.GothamMedium
-speedLabel.TextSize = 12
-speedLabel.TextXAlignment = Enum.TextXAlignment.Left
-
-local speedBtn = Instance.new("TextButton", speedRowFrame)
-speedBtn.Size = UDim2.new(0, 82, 0, 22)
-speedBtn.Position = UDim2.new(1, -86, 0.5, -11)
-speedBtn.BackgroundColor3 = Color3.fromRGB(36, 36, 40)
-speedBtn.TextColor3 = Color3.fromRGB(240, 240, 245)
-speedBtn.Text = "Sprint: " .. MINE_WALK_SPEED
-speedBtn.Font = Enum.Font.Gotham
-speedBtn.TextSize = 11
-speedBtn.BorderSizePixel = 0
-Instance.new("UICorner", speedBtn).CornerRadius = UDim.new(0, 5)
-local speedStroke = Instance.new("UIStroke", speedBtn)
-speedStroke.Color = Color3.fromRGB(70, 70, 80)
-speedStroke.Thickness = 1
-
-speedBtn.MouseButton1Click:Connect(function()
-    if not InstanceManager.Active then return end
-    if MINE_WALK_SPEED == 24 then
-        MINE_WALK_SPEED = 16
-        speedBtn.Text = "Walk: 16"
-    elseif MINE_WALK_SPEED == 16 then
-        MINE_WALK_SPEED = 20
-        speedBtn.Text = "Jog: 20"
-    else
-        MINE_WALK_SPEED = 24
-        speedBtn.Text = "Sprint: 24"
-    end
-    warn("[CONFIG] Movement speed updated to: " .. MINE_WALK_SPEED)
-end)
-
-createToggle(settingsScroll, "Smooth Movement", 80, MINE_SMOOTH_MOVE, function(state)
-    MINE_SMOOTH_MOVE = state
-    warn("[CONFIG] Smooth movement updated to: " .. tostring(state))
-end)
-
-createToggle(settingsScroll, "Micro Path Jitter", 115, ANTI_DET_WAYPOINT_JITTER, function(state)
-    ANTI_DET_WAYPOINT_JITTER = state
-    warn("[SECURITY] Path waypoint jitter updated to: " .. tostring(state))
-end)
-
-createToggle(settingsScroll, "Farming Break Delay", 150, FATIGUE_BREAK_ENABLED, function(state)
-    FATIGUE_BREAK_ENABLED = state
-    warn("[SECURITY] Fatigue break intervals updated to: " .. tostring(state))
-end)
-
-createToggle(settingsScroll, "Timing Randomization", 185, ANTI_DET_TIME_JITTER, function(state)
-    ANTI_DET_TIME_JITTER = state
-    warn("[SECURITY] Micro timing jitter updated to: " .. tostring(state))
-end)
-
-createToggle(settingsScroll, "Anti-AFK Mouse Sweep", 220, MOUSE_SWEEP_ENABLED, function(state)
-    MOUSE_SWEEP_ENABLED = state
-    warn("[SECURITY] Anti-AFK mouse sweeps updated to: " .. tostring(state))
-end)
-
--- ==========================================
--- CONSOLE PANEL GUI
--- ==========================================
-local consoleHeader = Instance.new("Frame", consolePanel)
-consoleHeader.Size = UDim2.new(1, 0, 0, 30)
-consoleHeader.BackgroundTransparency = 1
-
-local clearConsoleBtn = Instance.new("TextButton", consoleHeader)
-clearConsoleBtn.Size = UDim2.new(0, 80, 0, 20)
-clearConsoleBtn.Position = UDim2.new(1, -92, 0.5, -10)
-clearConsoleBtn.BackgroundColor3 = Color3.fromRGB(36, 36, 40)
-clearConsoleBtn.Text = "Clear Logs"
-clearConsoleBtn.Font = Enum.Font.GothamMedium
-clearConsoleBtn.TextSize = 10
-clearConsoleBtn.TextColor3 = Color3.fromRGB(180, 180, 185)
-clearConsoleBtn.BorderSizePixel = 0
-Instance.new("UICorner", clearConsoleBtn).CornerRadius = UDim.new(0, 4)
-local clearStroke = Instance.new("UIStroke", clearConsoleBtn)
-clearStroke.Color = Color3.fromRGB(55, 55, 60)
-clearStroke.Thickness = 1
-
-local scrollFrame = Instance.new("ScrollingFrame", consolePanel)
-scrollFrame.Size = UDim2.new(1, -24, 1, -40)
-scrollFrame.Position = UDim2.new(0, 12, 0, 35)
-scrollFrame.BackgroundTransparency = 1
-scrollFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
-scrollFrame.ScrollBarThickness = 2
-scrollFrame.ScrollBarImageColor3 = Color3.fromRGB(60, 60, 65)
-
-local uiList = Instance.new("UIListLayout", scrollFrame)
-uiList.SortOrder = Enum.SortOrder.LayoutOrder
-uiList.Padding = UDim.new(0, 4)
-
-local function appendConsoleLog(text)
-    local ts = os.date("%H:%M:%S")
-    local line = "[" .. ts .. "] " .. tostring(text)
-    
-    local lbl = Instance.new("TextLabel", scrollFrame)
-    lbl.Size = UDim2.new(1, 0, 0, 16)
-    lbl.BackgroundTransparency = 1
-    lbl.Text = line
-    lbl.TextColor3 = Color3.fromRGB(180, 180, 185)
-    lbl.Font = Enum.Font.Code
-    lbl.TextSize = 10
-    lbl.TextXAlignment = Enum.TextXAlignment.Left
-    lbl.TextYAlignment = Enum.TextYAlignment.Center
-    lbl.TextWrapped = true
-    
-    task.spawn(function()
-        scrollFrame.CanvasSize = UDim2.new(0, 0, 0, uiList.AbsoluteContentSize.Y + 15)
-        scrollFrame.CanvasPosition = Vector2.new(0, uiList.AbsoluteContentSize.Y)
+local function addSet(label, key, def)
+    CFG[key] = def
+    mkToggle(stp, label, stY, def, function(v)
+        CFG[key] = v
+        lg("[CFG] " .. label .. ": " .. tostring(v))
     end)
-    
-    local children = scrollFrame:GetChildren()
-    local cLabels = {}
-    for _, c in ipairs(children) do
-        if c:IsA("TextLabel") then table.insert(cLabels, c) end
-    end
-    if #cLabels > 60 then
-        cLabels[1]:Destroy()
-    end
+    stY = stY + 34
 end
-consoleLog = appendConsoleLog
 
-clearConsoleBtn.MouseButton1Click:Connect(function()
-    for _, c in ipairs(scrollFrame:GetChildren()) do
+mkLbl(stp, "Anti-Detection", 12, 10, Color3.fromRGB(80,80,90))
+stY = 32
+mkSep(stp, 30)
+
+addSet("Timing Randomization",   "timeJitter",   true)
+addSet("Click Coord Jitter",     "coordJitter",  true)
+addSet("Path Waypoint Jitter",   "pathJitter",   true)
+addSet("Fatigue Break",          "fatigueBreak", true)
+addSet("Anti-AFK Mouse Sweep",   "mouseAFK",     true)
+
+mkSep(stp, stY); stY = stY + 8
+mkLbl(stp, "Security", stY, 10, Color3.fromRGB(80,80,90))
+stY = stY + 20; mkSep(stp, stY); stY = stY + 8
+
+addSet("Admin / Staff Guard",    "adminGuard",   true)
+addSet("Anti-Script Fingerprint","antiFingerp",  true)
+
+-- ============================================================
+-- CONSOLE PANEL
+-- ============================================================
+local cp = panels["Console"]
+
+mkToggle(cp, "Console Logging", 10, false, function(v)
+    consoleOn = v
+    lg("[SYS] Console: " .. (v and "ON" or "OFF"))
+end)
+
+local clrBtn = Instance.new("TextButton", cp)
+clrBtn.Size = UDim2.new(0, 74, 0, 22)
+clrBtn.Position = UDim2.new(1, -86, 0, 10)
+clrBtn.BackgroundColor3 = Color3.fromRGB(28, 28, 34)
+clrBtn.Text = "Clear"
+clrBtn.TextColor3 = Color3.fromRGB(155,155,164)
+clrBtn.Font = Enum.Font.GothamMedium
+clrBtn.TextSize = 11
+clrBtn.BorderSizePixel = 0
+Instance.new("UICorner", clrBtn).CornerRadius = UDim.new(0, 6)
+local clrStr = Instance.new("UIStroke", clrBtn)
+clrStr.Color = Color3.fromRGB(44, 44, 51)
+clrStr.Thickness = 1
+
+mkSep(cp, 38)
+
+local logSF = Instance.new("ScrollingFrame", cp)
+logSF.Size = UDim2.new(1, -22, 1, -52)
+logSF.Position = UDim2.new(0, 11, 0, 48)
+logSF.BackgroundTransparency = 1
+logSF.CanvasSize = UDim2.new(0, 0, 0, 0)
+logSF.ScrollBarThickness = 2
+logSF.ScrollBarImageColor3 = Color3.fromRGB(52, 52, 60)
+
+local logLL = Instance.new("UIListLayout", logSF)
+logLL.SortOrder = Enum.SortOrder.LayoutOrder
+logLL.Padding = UDim.new(0, 3)
+
+local logOrd = 0
+local function appendLog(text)
+    if not consoleOn then return end
+    logOrd = logOrd + 1
+    local l = Instance.new("TextLabel", logSF)
+    l.LayoutOrder = logOrd
+    l.Size = UDim2.new(1, 0, 0, 14)
+    l.BackgroundTransparency = 1
+    l.Text = "[" .. os.date("%H:%M:%S") .. "] " .. tostring(text)
+    l.TextColor3 = Color3.fromRGB(155,155,165)
+    l.Font = Enum.Font.Code
+    l.TextSize = 10
+    l.TextXAlignment = Enum.TextXAlignment.Left
+    l.TextWrapped = true
+    task.defer(function()
+        logSF.CanvasSize = UDim2.new(0,0,0,logLL.AbsoluteContentSize.Y + 6)
+        logSF.CanvasPosition = Vector2.new(0, math.huge)
+    end)
+    local lbls = {}
+    for _, c in ipairs(logSF:GetChildren()) do
+        if c:IsA("TextLabel") then lbls[#lbls+1] = c end
+    end
+    if #lbls > 80 then lbls[1]:Destroy() end
+end
+_consLog = appendLog
+
+clrBtn.MouseButton1Click:Connect(function()
+    for _, c in ipairs(logSF:GetChildren()) do
         if c:IsA("TextLabel") then c:Destroy() end
     end
-    scrollFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+    logSF.CanvasSize = UDim2.new(0,0,0,0)
+    logOrd = 0
 end)
 
--- ==========================================
--- RECURSIVE VISIBILITY CHECK HELPER
--- ==========================================
-local function isTrulyVisible(obj)
+-- ============================================================
+-- HELPERS
+-- ============================================================
+local function trulyVis(obj)
     if not obj or typeof(obj) ~= "Instance" then return false end
     if not obj:IsA("GuiObject") then return false end
     if not obj.Visible then return false end
-    
-    local ok, size = pcall(function() return obj.AbsoluteSize end)
-    if not ok or not size or size.X <= 0 or size.Y <= 0 then return false end
-    
-    local current = obj.Parent
-    while current and current ~= game do
-        if current:IsA("ScreenGui") then
-            if not current.Enabled then return false end
-            break
-        elseif current:IsA("GuiObject") then
-            if not current.Visible then return false end
+    local ok, sz = pcall(function() return obj.AbsoluteSize end)
+    if not ok or sz.X <= 0 or sz.Y <= 0 then return false end
+    local cur = obj.Parent
+    while cur and cur ~= game do
+        if cur:IsA("ScreenGui") then
+            if not cur.Enabled then return false end; break
+        elseif cur:IsA("GuiObject") then
+            if not cur.Visible then return false end
         end
-        current = current.Parent
+        cur = cur.Parent
     end
     return true
 end
 
--- ==========================================
--- STATS LABEL UPDATE
--- ==========================================
-local function updateActivityStats()
-    fishStats.Text = "Fish Caught: " .. tostring(fishCaughtCount)
-    mineStats.Text = "Crystals Mined: " .. tostring(crystalMinedCount)
+local function findTool(lst)
+    local ch = me.Character
+    local bp = me.Backpack
+    if ch then
+        for _, n in ipairs(lst) do
+            local t = ch:FindFirstChild(n)
+            if t and t:IsA("Tool") then return t, "char" end
+        end
+    end
+    for _, n in ipairs(lst) do
+        local t = bp:FindFirstChild(n)
+        if t then return t, "bp" end
+    end
+    if ch then
+        local t = ch:FindFirstChildWhichIsA("Tool")
+        if t then return t, "char" end
+    end
+    return bp:FindFirstChildWhichIsA("Tool"), "bp"
 end
 
--- ==========================================
--- ANTI-AFK INTERCEPT (MOUSE SWEEP SPAMMER)
--- ==========================================
-local idledConnection
-idledConnection = player.Idled:Connect(function()
-    if not InstanceManager.Active then
-        if idledConnection then pcall(function() idledConnection:Disconnect() end) end
-        return
+local function equipTool(lst)
+    local ch = me.Character
+    if not ch then return nil end
+    local hum = ch:FindFirstChildOfClass("Humanoid")
+    if not hum then return nil end
+    local eq = ch:FindFirstChildWhichIsA("Tool")
+    for _, n in ipairs(lst) do
+        if eq and eq.Name:lower():find(n:lower()) then return eq end
     end
-    pcall(function()
-        VirtualUser:Button2Down(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
-        task.wait(0.2)
-        VirtualUser:Button2Up(Vector2.new(0, 0), workspace.CurrentCamera.CFrame)
-    end)
-end)
-table.insert(InstanceManager.Connections, idledConnection)
+    local t, loc = findTool(lst)
+    if t and loc == "bp" then
+        pcall(function() hum:EquipTool(t) end)
+        task.wait(0.7)
+        return ch:FindFirstChildWhichIsA("Tool")
+    end
+    return eq
+end
 
--- AFK Mouse Sweep Anti-AFK Simulation Loop
+local function jitterT(base, pct)
+    if not CFG.timeJitter then return base end
+    return base * (1 + (math.random()*2-1) * (pct or 0.12))
+end
+
+local function jitterV2(v)
+    if not CFG.coordJitter then return v end
+    return Vector2.new(v.X + math.random(-13,13), v.Y + math.random(-11,11))
+end
+
+-- ============================================================
+-- ANTI-AFK & FATIGUE
+-- ============================================================
 task.spawn(function()
-    while InstanceManager.Active do
-        task.wait(math.random(110, 160))
-        if not InstanceManager.Active then break end
-        if MOUSE_SWEEP_ENABLED then
-            safeRun(function()
+    while Manager.alive do
+        task.wait(math.random(95, 155))
+        if not Manager.alive then break end
+        if CFG.mouseAFK then
+            pcall(function()
                 local cam = workspace.CurrentCamera
                 if cam then
-                    local size = cam.ViewportSize
-                    local p1 = Vector2.new(size.X / 2 + math.random(-100, 100), size.Y / 2 + math.random(-100, 100))
-                    pcall(function()
-                        VirtualUser:MouseMoveEvent(p1, cam.CFrame)
-                    end)
+                    local sz = cam.ViewportSize
+                    VU:MouseMoveEvent(Vector2.new(sz.X/2 + math.random(-75,75), sz.Y/2 + math.random(-55,55)), cam.CFrame)
                 end
             end)
         end
     end
 end)
 
--- ==========================================
--- HUMANIZATION / SECURITY BREAK ENGINE
--- ==========================================
-local function performFatigueBreak(overrideStatus)
-    if not FATIGUE_BREAK_ENABLED or not InstanceManager.Active then return end
-    actionsSinceLastBreak = actionsSinceLastBreak + 1
-    if actionsSinceLastBreak >= nextBreakThreshold then
-        local breakSec = math.random(FATIGUE_BREAK_MIN, FATIGUE_BREAK_MAX)
-        warn("[SECURITY] Triggering artificial fatigue break for " .. breakSec .. " seconds")
-        
-        local oldStatus = overrideStatus.Text
-        overrideStatus.Text = "Status: Resting (" .. breakSec .. "s)"
-        
-        -- Safe State Resets
-        pcall(function() VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game) end)
-        pcall(function() VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game) end)
-        isSpacePressed = false
-        
-        task.wait(breakSec)
-        
-        actionsSinceLastBreak = 0
-        nextBreakThreshold = math.random(12, 22)
-        overrideStatus.Text = oldStatus
-        warn("[SECURITY] Fatigue break complete. Resuming activities")
-    end
+local afkC = me.Idled:Connect(function()
+    pcall(function()
+        VU:Button2Down(Vector2.new(0,0), workspace.CurrentCamera.CFrame)
+        task.wait(0.13)
+        VU:Button2Up(Vector2.new(0,0), workspace.CurrentCamera.CFrame)
+    end)
+end)
+table.insert(Manager.conns, afkC)
+
+local function checkFatigue(statLbl)
+    if not CFG.fatigueBreak then return end
+    fatCount = fatCount + 1
+    if fatCount < fatNext then return end
+    local sec = math.random(5, 11)
+    lg("[SEC] Resting " .. sec .. "s")
+    local prev = statLbl.Text
+    statLbl.Text = "Status: Resting"
+    pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.Space, false, game) end)
+    pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game) end)
+    isSpace = false
+    task.wait(sec)
+    fatCount = 0
+    fatNext  = math.random(12, 22)
+    statLbl.Text = prev
+    lg("[SEC] Break done")
 end
 
--- ==========================================
--- TOOLS MANAGEMENT FUNCTIONS
--- ==========================================
-local function findTool(nameList)
-    local char = player.Character
-    local bp   = player.Backpack
-    for _, name in ipairs(nameList) do
-        if char then
-            local t = char:FindFirstChild(name)
-            if t and t:IsA("Tool") then return t, "hand" end
+-- ============================================================
+-- ADMIN DETECTION
+-- ============================================================
+local STAFF_GRP = 1200769
+local ADM_PATS  = {"moderator","roblox_adm","rbxadmin","staffmod","gamemaster","game_master","game master"}
+
+local function checkAdmin(p)
+    if p == me or not p.Parent then return end
+    if not CFG.adminGuard then return end
+    task.wait(2.2)
+    if not p or not p.Parent then return end
+    local isAdm = false
+    pcall(function() isAdm = isAdm or p:IsInGroup(STAFF_GRP) end)
+    if not isAdm then
+        local ln = (p.Name .. p.DisplayName):lower()
+        for _, pat in ipairs(ADM_PATS) do
+            if ln:find(pat) then isAdm = true; break end
         end
-        local t = bp:FindFirstChild(name)
-        if t then return t, "backpack" end
     end
-    if char then
-        local t = char:FindFirstChildWhichIsA("Tool")
-        if t then return t, "hand" end
+    if not isAdm then
+        pcall(function()
+            if game.CreatorType == Enum.CreatorType.Group then
+                if p:GetRankInGroup(game.CreatorId) >= 200 then isAdm = true end
+            end
+        end)
     end
-    local t = bp:FindFirstChildWhichIsA("Tool")
-    if t then return t, "backpack" end
-    return nil, nil
-end
-
-local function equipTool(nameList)
-    local char = player.Character
-    if not char then return nil end
-    local hum = char:FindFirstChildOfClass("Humanoid")
-    if not hum then return nil end
-    local inHand = char:FindFirstChildWhichIsA("Tool")
-    for _, name in ipairs(nameList) do
-        if inHand and inHand.Name:lower():find(name:lower()) then return inHand end
-    end
-    local tool, loc = findTool(nameList)
-    if tool and loc == "backpack" then
-        pcall(function() hum:EquipTool(tool) end)
+    if isAdm then
+        lg("[SEC] Moderator detected: " .. p.Name)
+        mode = "OFF"
+        pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.Space, false, game) end)
+        pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game) end)
+        isSpace = false
         task.wait(0.8)
-        return char:FindFirstChildWhichIsA("Tool")
+        me:Kick("Disconnected.")
     end
-    return inHand
 end
 
--- ==========================================
--- FISHING CORE LOGIC
--- ==========================================
-local function resetFishingState()
-    isCasting         = false
-    isSpacePressed    = false
-    minigameJustStarted = false
-    successHandled    = false
-    guiEverSeen       = false
-    cachedWhiteBar    = nil
-    cachedRedBar      = nil
-    lastGuiScan       = 0
-    lastWhiteCenter   = nil
-    whiteVelocity     = 0
-    lastMinigameGuiSeen = 0
-    fishingState      = "IDLE"
-    
-    setFishPhase(0)
+for _, p in ipairs(Players:GetPlayers()) do task.spawn(checkAdmin, p) end
+local admC = Players.PlayerAdded:Connect(function(p) task.spawn(checkAdmin, p) end)
+table.insert(Manager.conns, admC)
+
+-- ============================================================
+-- FISHING ENGINE
+-- ============================================================
+local function resetFish()
+    fishState   = "IDLE"
+    isSpace     = false
+    isCasting   = false
+    successDone = false
+    mgEverSeen  = false
+    mgStarted   = false
+    wBar        = nil
+    rBar        = nil
+    lastScan    = 0
+    lastWC      = nil
+    wVel        = 0
+    mgLastSeen  = 0
+    castSession = castSession + 1
+    pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.Space, false, game) end)
+    setPhase(0)
 end
 
-local function setSpaceKey(pressed, force)
-    if isSpacePressed == pressed then return end
+local function setSpace(v, force)
+    if isSpace == v and not force then return end
     local now = os.clock()
-    if not force and now - lastSpaceToggle < 0.035 then return end
-    pcall(function() VirtualInputManager:SendKeyEvent(pressed, Enum.KeyCode.Space, false, game) end)
-    isSpacePressed    = pressed
-    lastSpaceToggle   = now
+    if not force and (now - lastSpTgl) < 0.03 then return end
+    pcall(function() VIM:SendKeyEvent(v, Enum.KeyCode.Space, false, game) end)
+    isSpace  = v
+    lastSpTgl = now
 end
 
-local function getFishingElements()
-    if cachedWhiteBar and cachedRedBar
-       and cachedWhiteBar.Parent and cachedRedBar.Parent
-       and isTrulyVisible(cachedWhiteBar) and isTrulyVisible(cachedRedBar) then
-        return cachedWhiteBar, cachedRedBar
+local function getBars()
+    -- Jangan pakai cache jika sudah tidak valid
+    if wBar and rBar and wBar.Parent and rBar.Parent and trulyVis(wBar) and trulyVis(rBar) then
+        return wBar, rBar
     end
-
     local now = os.clock()
-    if now - lastGuiScan < 0.06 then return nil, nil end
-    lastGuiScan = now
+    if now - lastScan < 0.04 then return nil, nil end
+    lastScan = now
+    wBar = nil; rBar = nil
 
-    local pg = player:FindFirstChild("PlayerGui")
+    local pg = me:FindFirstChild("PlayerGui")
     if not pg then return nil, nil end
 
-    -- Match by Names
+    -- nama-based scan
     for _, v in pairs(pg:GetDescendants()) do
-        if v:IsA("GuiObject") and isTrulyVisible(v) then
-            local lname  = v.Name:lower()
-            local parent = v.Parent
-            if (lname == "whitebar" or lname:match("^whitebar") or lname:match("whitebar$") or
-                lname == "playerbar" or (lname:find("white") and lname:find("bar"))) and
-               parent and parent:IsA("GuiObject") then
-                local red = parent:FindFirstChild("RedBar") or parent:FindFirstChild("redbar") or
-                            parent:FindFirstChild("TargetBar") or parent:FindFirstChild("targetbar")
-                if not red then
-                    for _, sib in ipairs(parent:GetChildren()) do
-                        if sib ~= v and sib:IsA("GuiObject") and isTrulyVisible(sib) then
-                            local sn = sib.Name:lower()
-                            if sn:find("red") or sn:find("target") or sn:find("goal") or sn:find("indicator") then
-                                red = sib; break
+        if v:IsA("GuiObject") and trulyVis(v) then
+            local ln = v.Name:lower()
+            local par = v.Parent
+            if par and par:IsA("GuiObject") then
+                local isWhite = ln == "whitebar" or ln == "playerbar"
+                    or (ln:find("white") and ln:find("bar"))
+                if isWhite then
+                    local red = par:FindFirstChild("RedBar") or par:FindFirstChild("TargetBar")
+                    if not red then
+                        for _, sib in ipairs(par:GetChildren()) do
+                            if sib ~= v and sib:IsA("GuiObject") and trulyVis(sib) then
+                                local sn = sib.Name:lower()
+                                if sn:find("red") or sn:find("target") or sn:find("goal") then
+                                    red = sib; break
+                                end
                             end
                         end
                     end
-                end
-                if red and isTrulyVisible(red) and v.AbsoluteSize.X > 10 and v.AbsoluteSize.Y > 5 then
-                    cachedWhiteBar = v; cachedRedBar = red
-                    return v, red
+                    if red and trulyVis(red) and v.AbsoluteSize.X > 10 then
+                        wBar = v; rBar = red
+                        return v, red
+                    end
                 end
             end
         end
     end
 
-    -- Match by Colors
+    -- color-based fallback
     for _, v in pairs(pg:GetDescendants()) do
-        if v:IsA("GuiObject") and isTrulyVisible(v)
-           and v.AbsoluteSize.X > 15 and v.AbsoluteSize.Y > 6 then
+        if v:IsA("GuiObject") and trulyVis(v) and v.AbsoluteSize.X > 12 and v.AbsoluteSize.Y > 5 then
             local c = v.BackgroundColor3
             local p = v.Parent
-            if c.R > 0.85 and c.G > 0.85 and c.B > 0.85 and p and p:IsA("GuiObject") then
+            if c.R > 0.80 and c.G > 0.80 and c.B > 0.80 and p and p:IsA("GuiObject") then
                 for _, sib in ipairs(p:GetChildren()) do
-                    if sib ~= v and sib:IsA("GuiObject") and isTrulyVisible(sib) and sib.AbsoluteSize.X > 15 then
+                    if sib ~= v and sib:IsA("GuiObject") and trulyVis(sib) and sib.AbsoluteSize.X > 12 then
                         local sc = sib.BackgroundColor3
-                        if sc.R > 0.52 and sc.G < 0.28 and sc.B < 0.28 then
-                            cachedWhiteBar = v; cachedRedBar = sib
+                        if sc.R > 0.48 and sc.G < 0.24 and sc.B < 0.24 then
+                            wBar = v; rBar = sib
                             return v, sib
                         end
                     end
@@ -971,712 +1082,636 @@ local function getFishingElements()
         end
     end
 
-    cachedWhiteBar = nil; cachedRedBar = nil
     return nil, nil
 end
 
-local castRod
-castRod = function()
-    if isCasting or not InstanceManager.Active then return end
-    isCasting = true
-    safeRun(function()
-        local cam = workspace.CurrentCamera
-        if not cam then isCasting = false; return end
-        
-        -- Coordinates Jitter Anti-Detection
-        local size = cam.ViewportSize
-        local center = size / 2
-        if ANTI_DET_COORD_JITTER then
-            center = Vector2.new(center.X + math.random(-15, 15), center.Y + math.random(-15, 15))
-        end
-
-        fishingState = "CASTING"
-        setFishPhase(1)
-        updateTimerFill(0)
-        fishStatus.Text = "Status: Casting line"
-        warn("[FISHING] Casting fishing line")
-
-        local tool = player.Character and player.Character:FindFirstChildWhichIsA("Tool")
-        if tool then pcall(function() tool:Activate() end) end
-        pcall(function() VirtualUser:Button1Down(center, cam.CFrame) end)
-
-        -- Casting Time Jitter Anti-Detection
-        local castDur = FISH_CAST_DURATION
-        if ANTI_DET_TIME_JITTER then
-            castDur = FISH_CAST_DURATION + (math.random(-12, 12) / 100)
-        end
-
-        local castStart = os.clock()
-        while os.clock() - castStart < castDur do
-            task.wait(0.05)
-            if not InstanceManager.Active or mode ~= "FISH" then
-                pcall(function() VirtualUser:Button1Up(center, cam.CFrame) end)
-                isCasting = false; return
-            end
-            updateTimerFill((os.clock() - castStart) / castDur)
-        end
-
-        pcall(function() VirtualUser:Button1Up(center, cam.CFrame) end)
-        if tool then pcall(function() tool:Deactivate() end) end
-        updateTimerFill(1)
-        
-        -- Post-cast delay jitter
-        local pDelay = 0.2
-        if ANTI_DET_TIME_JITTER then pDelay = 0.2 + (math.random(-4, 8) / 100) end
-        task.wait(pDelay)
-
-        if InstanceManager.Active and mode == "FISH" then
-            fishingState     = "WAITING"
-            biteWaitStartTime = os.clock()
-            lastCastTime     = os.clock()
-            setFishPhase(2)
-            updateTimerFill(0)
-            fishStatus.Text = "Status: Waiting for bite"
-            warn("[FISHING] Line cast. Waiting for bite")
-        end
-    end)
-    task.wait(0.2)
-    isCasting = false
-end
-
-local function handleFishSuccess(reason)
-    if successHandled then return end
-    successHandled = true
-
-    setSpaceKey(false, true)
-    fishingState = "SUCCESS"
-    setFishPhase(4)
-    updateTimerFill(1)
-
-    fishCaughtCount = fishCaughtCount + 1
-    updateActivityStats()
-    isSpacePressed      = false
-    minigameJustStarted = false
-
-    local msg = "Fish caught successfully (" .. tostring(fishCaughtCount) .. ")"
-    fishStatus.Text = "Status: Caught"
-    warn("[FISHING] " .. msg)
-
-    task.spawn(function()
-        -- Jitter recast delay
-        local reDelay = FISH_RECAST_DELAY
-        if ANTI_DET_TIME_JITTER then
-            reDelay = FISH_RECAST_DELAY + (math.random(-15, 30) / 100)
-        end
-        task.wait(reDelay)
-        if not InstanceManager.Active or mode ~= "FISH" then return end
-        
-        -- Fatigue check before casting again
-        performFatigueBreak(fishStatus)
-        
-        resetFishingState()
-        task.wait(0.1)
-        if not InstanceManager.Active or mode ~= "FISH" then return end
-        task.spawn(castRod)
+local function doSuccess(reason)
+    if successDone then return end
+    successDone = true
+    setSpace(false, true)
+    fishState = "DONE"
+    setPhase(4)
+    fishCount = fishCount + 1
+    fishCntLbl.Text = "Fish Caught: " .. fishCount
+    fishStatLbl.Text = "Status: Caught"
+    lg("[FISH] Caught #" .. fishCount .. " via " .. reason)
+    checkFatigue(fishStatLbl)
+    local sess = castSession
+    task.delay(jitterT(RECAST_DLY, 0.15), function()
+        if not Manager.alive or mode ~= "FISH" or castSession ~= sess then return end
+        resetFish()
+        task.wait(0.06)
+        if mode == "FISH" then fishState = "IDLE" end
     end)
 end
 
--- ==========================================
--- FISHING MINIGAME HEARTBEAT ENGINE
--- ==========================================
-local heartbeatConnection
-heartbeatConnection = RunService.Heartbeat:Connect(function()
-    if not InstanceManager.Active then
-        if heartbeatConnection then pcall(function() heartbeatConnection:Disconnect() end) end
-        return
-    end
-
+-- Heartbeat: handles minigame logic
+local hbC = RS.Heartbeat:Connect(function()
+    if not Manager.alive then return end
     if mode ~= "FISH" then
-        if isSpacePressed then setSpaceKey(false, true) end
+        if isSpace then setSpace(false, true) end
         return
     end
 
-    safeRun(function()
-        local now = os.clock()
+    safe(function()
+        local now  = os.clock()
+        local rod  = RODS[selectedRod]
 
-        -- Waiting Phase
-        if fishingState == "WAITING" then
-            local elapsed  = now - biteWaitStartTime
-            local fraction = math.clamp(elapsed / FISH_BITE_WAIT, 0, 1)
-            updateTimerFill(fraction)
-            fishStatus.Text = string.format("Status: Waiting (%.1fs)", math.max(0, FISH_BITE_WAIT - elapsed))
-
-            if elapsed >= FISH_BITE_WAIT then
-                fishingState     = "MINIGAME"
-                minigameStartTime = now
-                successHandled   = false
-                guiEverSeen      = false
-                minigameJustStarted = false
-                lastMinigameGuiSeen = 0
-                cachedWhiteBar   = nil
-                cachedRedBar     = nil
-                lastGuiScan      = 0
-                lastWhiteCenter  = nil
-                whiteVelocity    = 0
-                setSpaceKey(false, true)
-                setFishPhase(3)
-                updateTimerFill(0)
-                fishStatus.Text = "Status: Minigame active"
-                warn("[FISHING] Starting minigame loop")
+        if fishState == "WAITING" then
+            local el = now - biteStart
+            setPBar(math.clamp(el / BITE_WAIT, 0, 1))
+            fishStatLbl.Text = string.format("Status: Waiting (%.0fs)", math.max(0, BITE_WAIT - el))
+            if el >= BITE_WAIT then
+                fishState  = "MINIGAME"
+                mgStart    = now
+                mgEverSeen = false
+                mgStarted  = false
+                mgLastSeen = 0
+                successDone = false
+                -- PENTING: bersihkan cache bar setiap awal minigame baru
+                wBar    = nil
+                rBar    = nil
+                lastScan = 0
+                lastWC  = nil
+                wVel    = 0
+                lastWTime = now
+                setSpace(false, true)
+                setPhase(3)
+                setPBar(0)
+                fishStatLbl.Text = "Status: Minigame"
+                lg("[FISH] Minigame start")
             end
             return
         end
 
-        -- Minigame Phase
-        if fishingState == "MINIGAME" then
-            local elapsed = now - minigameStartTime
-            updateTimerFill(math.clamp(elapsed / FISH_MINIGAME_MAX, 0, 1))
+        if fishState == "MINIGAME" then
+            local el = now - mgStart
+            -- timeout adaptif: rod progress lebih cepat = minigame lebih singkat
+            local timeout = 11 + rod.prog * 3.5
+            setPBar(math.clamp(el / timeout, 0, 1))
 
-            -- Fallback Timeout
-            if elapsed >= FISH_MINIGAME_MAX then
-                setSpaceKey(false, true)
-                warn("[FISHING] Minigame timeout fallback triggered")
-                handleFishSuccess("timeout")
+            if el >= timeout then
+                setSpace(false, true)
+                doSuccess("timeout")
                 return
             end
 
-            local white, red = getFishingElements()
+            local wb, rb = getBars()
 
-            if white and red and isTrulyVisible(white) and isTrulyVisible(red) then
-                guiEverSeen         = true
-                lastMinigameGuiSeen = now
+            if wb and rb and trulyVis(wb) and trulyVis(rb) then
+                mgEverSeen = true
+                mgLastSeen = now
 
-                if not minigameJustStarted then
-                    minigameJustStarted = true
-                    setSpaceKey(false, true)
-                    lastWhiteCenter = nil
-                    whiteVelocity   = 0
+                if not mgStarted then
+                    mgStarted = true
+                    setSpace(false, true)
+                    lastWC    = nil
+                    wVel      = 0
+                    lastWTime = now
                 end
 
-                local whiteCenter = white.AbsolutePosition.X + white.AbsoluteSize.X / 2
-                local redLeft     = red.AbsolutePosition.X
-                local redRight    = red.AbsolutePosition.X + red.AbsoluteSize.X
-                local redCenter   = (redLeft + redRight) / 2
-                local dt          = math.max(now - lastWhiteSample, 0.012)
+                local wC  = wb.AbsolutePosition.X + wb.AbsoluteSize.X * 0.5
+                local rL  = rb.AbsolutePosition.X
+                local rR  = rL + rb.AbsoluteSize.X
+                local rC  = (rL + rR) * 0.5
 
-                if lastWhiteCenter then
-                    local inst   = (whiteCenter - lastWhiteCenter) / dt
-                    whiteVelocity = whiteVelocity * 0.72 + inst * 0.28
+                -- Delta time untuk lag compensation — clamp agar prediksi tetap wajar
+                local rawDt = now - lastWTime
+                local dt    = math.clamp(rawDt, 0.007, 0.14)
+
+                if lastWC then
+                    local inst   = (wC - lastWC) / dt
+                    -- rod lebih cepat → smoothing lebih cepat
+                    local smooth = math.clamp(0.28 / rod.lure, 0.1, 0.32)
+                    wVel = wVel * (1 - smooth) + inst * smooth
                 end
-                lastWhiteCenter = whiteCenter
-                lastWhiteSample = now
+                lastWC    = wC
+                lastWTime = now
 
-                local lookAhead = math.clamp(math.abs(whiteVelocity) / 2000, 0.04, 0.12)
-                local predicted = whiteCenter + whiteVelocity * lookAhead
-                local redWidth  = math.max(red.AbsoluteSize.X, 1)
-                local tolerance = math.clamp(redWidth * 0.22, 6, 18)
-                local inside    = predicted >= (redLeft - tolerance) and predicted <= (redRight + tolerance)
+                -- Prediksi posisi bar ke depan
+                -- rod lebih cepat → perlu prediksi lebih jauh
+                local ahead     = math.clamp(math.abs(wVel) / 1700, 0.03, 0.18) * math.sqrt(rod.lure)
+                local predicted = wC + wVel * ahead
+
+                local rw  = math.max(rb.AbsoluteSize.X, 1)
+                -- toleransi lebih lebar saat lag terdeteksi
+                local lag = math.clamp(rawDt / 0.05 - 1, 0, 1.2)
+                local tol = math.clamp(rw * (0.18 + lag * 0.14 + rod.lure * 0.025), 4, 26)
+
+                local inside = predicted >= (rL - tol) and predicted <= (rR + tol)
 
                 if inside then
-                    if whiteCenter < redLeft then
-                        setSpaceKey(true)
-                    elseif whiteCenter > redRight then
-                        setSpaceKey(false)
+                    if wC < rL then
+                        setSpace(true)
+                    elseif wC > rR then
+                        setSpace(false)
                     else
-                        local err = whiteCenter - redCenter
-                        if math.abs(err) > tolerance * 0.5 then setSpaceKey(err < 0) end
+                        local err = wC - rC
+                        if math.abs(err) > tol * 0.4 then setSpace(err < 0) end
                     end
                 else
-                    local err = redCenter - predicted
-                    if     err >  tolerance then setSpaceKey(true)
-                    elseif err < -tolerance then setSpaceKey(false)
-                    elseif math.abs(whiteVelocity) > 200 then setSpaceKey(whiteVelocity < 0) end
+                    local err = rC - predicted
+                    if     err >  tol then setSpace(true)
+                    elseif err < -tol then setSpace(false)
+                    elseif math.abs(wVel) > 140 then setSpace(wVel < 0)
+                    end
                 end
 
-                fishStatus.Text = string.format("Status: Play (%.1fs)", elapsed)
+                fishStatLbl.Text = string.format("Status: Playing (%.0fs)", el)
 
             else
-                if guiEverSeen then
-                    -- Instant exit when GUI is gone
-                    if lastMinigameGuiSeen > 0 and (now - lastMinigameGuiSeen) >= 0.25 then
-                        setSpaceKey(false, true)
-                        warn("[FISHING] Minigame GUI disappeared, concluding run")
-                        handleFishSuccess("gui-disappeared")
-                        return
+                if mgEverSeen then
+                    -- bar menghilang, berarti minigame selesai
+                    if mgLastSeen > 0 and (now - mgLastSeen) >= 0.20 then
+                        setSpace(false, true)
+                        doSuccess("bar-gone")
                     end
                 else
-                    -- Rhythmic tapping while GUI is loading
-                    local rhythm = (math.floor(elapsed * 4) % 2 == 0)
-                    setSpaceKey(rhythm)
-                    fishStatus.Text = string.format("Status: Sync (%.1fs)", elapsed)
+                    -- bar belum muncul, ketuk ritmis sembari tunggu
+                    local beat = math.floor((now - mgStart) * 3.2) % 2 == 0
+                    setSpace(beat)
+                    fishStatLbl.Text = string.format("Status: Sync (%.0fs)", el)
                 end
             end
-            return
         end
     end)
 end)
-table.insert(InstanceManager.Connections, heartbeatConnection)
+table.insert(Manager.conns, hbC)
 
--- Fishing Controller Loop
+-- Fishing main controller loop
 task.spawn(function()
-    while InstanceManager.Active do
-        task.wait(0.15)
-        if not InstanceManager.Active then break end
-        if mode ~= "FISH" then continue end
-        
-        safeRun(function()
-            local char = player.Character
-            if not char then return end
-            local hum = char:FindFirstChildOfClass("Humanoid")
+    while Manager.alive do
+        task.wait(0.16)
+        if not Manager.alive or mode ~= "FISH" then continue end
+        safe(function()
+            local ch  = me.Character
+            if not ch then return end
+            local hum = ch:FindFirstChildOfClass("Humanoid")
+            if not hum then return end
 
-            if hum and hum:GetStateEnabled(Enum.HumanoidStateType.Jumping) then
+            if hum:GetStateEnabled(Enum.HumanoidStateType.Jumping) then
                 hum:SetStateEnabled(Enum.HumanoidStateType.Jumping, false)
             end
 
-            local tool = equipTool(FISH_TOOL_NAMES)
-            if tool and not isCasting then
-                if fishingState == "IDLE" then
-                    fishStatus.Text = "Status: Ready"
-                    task.spawn(castRod)
-                end
-            elseif not tool then
-                fishStatus.Text = "Status: No rod found"
+            local tool = equipTool(FISH_TOOLS)
+            if not tool then fishStatLbl.Text = "Status: No rod"; return end
+
+            if fishState == "IDLE" and not isCasting then
+                isCasting = true
+                castSession = castSession + 1
+                local sess = castSession
+
+                task.spawn(function()
+                    if not Manager.alive or mode ~= "FISH" or castSession ~= sess then
+                        isCasting = false; return
+                    end
+                    local cam = workspace.CurrentCamera
+                    if not cam then isCasting = false; return end
+
+                    local rod    = RODS[selectedRod]
+                    local center = jitterV2(cam.ViewportSize / 2)
+
+                    fishState = "CASTING"
+                    setPhase(1); setPBar(0)
+                    fishStatLbl.Text = "Status: Casting"
+                    lg("[FISH] Cast #" .. (fishCount+1) .. " (" .. rod.name .. ")")
+
+                    pcall(function() tool:Activate() end)
+                    pcall(function() VU:Button1Down(center, cam.CFrame) end)
+
+                    -- durasi cast dikurangi untuk rod dengan lure tinggi (umpan mudah jatuh)
+                    local dur = jitterT(CAST_HOLD / math.max(1, math.sqrt(rod.lure) * 0.85), 0.1)
+                    local t0  = os.clock()
+                    while os.clock() - t0 < dur do
+                        task.wait(0.04)
+                        if mode ~= "FISH" or not Manager.alive or castSession ~= sess then
+                            pcall(function() VU:Button1Up(center, cam.CFrame) end)
+                            isCasting = false; return
+                        end
+                        setPBar((os.clock()-t0) / dur)
+                    end
+
+                    pcall(function() VU:Button1Up(center, cam.CFrame) end)
+                    setPBar(1)
+                    task.wait(jitterT(0.15, 0.08))
+
+                    if mode ~= "FISH" or not Manager.alive or castSession ~= sess then
+                        isCasting = false; return
+                    end
+
+                    fishState = "WAITING"
+                    biteStart = os.clock()
+                    setPhase(2); setPBar(0)
+                    fishStatLbl.Text = "Status: Waiting"
+                    lg("[FISH] Waiting for bite")
+                    isCasting = false
+                end)
             end
         end)
     end
 end)
 
-forceTurnOffFish = function()
-    mode = "OFF"
-    fishStatus.Text = "Status: Idle"
-    shared.FishToggleFunction(false)
-    
-    pcall(function() 
-        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game) 
-        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game)
-    end)
-    isSpacePressed = false
-    resetFishingState()
-    
-    pcall(function()
-        local hum = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
-        if hum then hum:SetStateEnabled(Enum.HumanoidStateType.Jumping, true) end
-    end)
-end
+-- ============================================================
+-- MINING ENGINE
+-- ============================================================
 
--- ==========================================
--- MINING OPERATIONS & ALGORITHMS
--- ==========================================
-local function isLikelyCrystal(obj)
-    if not (obj:IsA("BasePart") or obj:IsA("MeshPart")) then return false, 0 end
-    local lname = obj.Name:lower()
-    local score = 0
-    for _, cname in ipairs(CRYSTAL_NAMES) do
-        if lname:find(cname:lower()) then score = score + 4; break end
-    end
-    if obj.Material == CRYSTAL_MATERIAL then score = score + 3 end
-    if obj:IsA("MeshPart") then score = score + 1 end
-    if obj.Transparency < 0.85 then score = score + 1 end
-    if obj.CanCollide or obj.CanQuery then score = score + 1 end
-    local parent = obj.Parent
-    while parent and parent ~= workspace do
-        local pname = parent.Name:lower()
-        if pname:find("crystal") or pname:find("ore") or pname:find("mine") or pname:find("batu") then
-            score = score + 3; break
-        end
-        parent = parent.Parent
-    end
-    return score >= 4, score
-end
-
-local function belongsToOtherPlayer(obj)
-    local cursor = obj
-    while cursor and cursor ~= workspace do
-        for _, key in ipairs({"Owner","owner","OwnerName","ownerName","UserId","userId","Player","player"}) do
-            local value = cursor:GetAttribute(key)
-            if value ~= nil then
-                if typeof(value) == "number" and value ~= player.UserId then return true end
-                if typeof(value) == "string" and value ~= "" and value ~= player.Name
-                   and value ~= player.DisplayName and value ~= tostring(player.UserId) then return true end
-            end
-        end
-        for _, cn in ipairs({"Owner","OwnerName","PlayerName","UserId"}) do
-            local child = cursor:FindFirstChild(cn)
-            if child and child:IsA("ValueBase") then
-                local v2 = child.Value
-                if typeof(v2) == "number" and v2 ~= player.UserId then return true end
-                if typeof(v2) == "string" and v2 ~= "" and v2 ~= player.Name
-                   and v2 ~= player.DisplayName and v2 ~= tostring(player.UserId) then return true end
-                if typeof(v2) == "Instance" and v2:IsA("Player") and v2 ~= player then return true end
-            end
-        end
-        cursor = cursor.Parent
+-- cek apakah nama termasuk blacklist
+local function isBL(name)
+    local ln = name:lower()
+    for _, bl in ipairs(CRYS_BL) do
+        if ln:find(bl, 1, true) then return true end
     end
     return false
 end
 
-local function findNearestCrystal()
-    local char = player.Character
-    if not char or not char.PrimaryPart then return nil end
-    local myPos = char.PrimaryPart.Position
-    if currentMiningTarget and currentMiningTarget.Parent and not belongsToOtherPlayer(currentMiningTarget) then
-        local d = (currentMiningTarget.Position - myPos).Magnitude
-        if d < MINE_MAX_SCAN_DISTANCE and miningFailCount < 3 then return currentMiningTarget, d end
+-- scoring crystal candidate
+local function scorePart(part)
+    if not (part:IsA("BasePart") or part:IsA("MeshPart")) then return -1 end
+    if isBL(part.Name) then return -999 end
+
+    -- cek parent chain juga
+    local par = part.Parent
+    while par and par ~= workspace do
+        if isBL(par.Name) then return -999 end
+        par = par.Parent
     end
-    local nearest, nearestValue, nearestDist = nil, math.huge, math.huge
-    for _, obj in pairs(workspace:GetDescendants()) do
-        local ok, score = isLikelyCrystal(obj)
-        if ok and not belongsToOtherPlayer(obj) then
-            local dist = (obj.Position - myPos).Magnitude
-            if dist < MINE_MAX_SCAN_DISTANCE then
-                local value = dist - score * 10
-                if value < nearestValue then nearest = obj; nearestDist = dist; nearestValue = value end
+
+    local sc = 0
+    local ln = part.Name:lower()
+
+    for _, cn in ipairs(CRYS_NAMES) do
+        if ln:find(cn:lower(), 1, true) then sc = sc + 5; break end
+    end
+
+    if part.Material == Enum.Material.Neon        then sc = sc + 3 end
+    if part:IsA("MeshPart")                        then sc = sc + 1 end
+    if part.Transparency < 0.85                    then sc = sc + 1 end
+    if part.CanCollide                             then sc = sc + 1 end
+
+    local sz = part.Size
+    -- terlalu besar = bukan crystal
+    if sz.X > 20 or sz.Y > 20 or sz.Z > 20       then sc = sc - 6 end
+    -- terlalu kecil = bukan crystal (particle, detail)
+    if sz.X < 0.35 and sz.Y < 0.35 and sz.Z < 0.35 then sc = sc - 5 end
+
+    -- bonus nama parent
+    local pname = (part.Parent and part.Parent.Name or ""):lower()
+    for _, cn in ipairs(CRYS_NAMES) do
+        if pname:find(cn:lower(), 1, true) then sc = sc + 3; break end
+    end
+
+    return sc
+end
+
+-- apakah crystal sedang ditambang player lain?
+local function isOccupied(crystal)
+    for _, p in ipairs(Players:GetPlayers()) do
+        if p ~= me and p.Character then
+            local root = p.Character.PrimaryPart
+            if root and (root.Position - crystal.Position).Magnitude < 11 then
+                local t = p.Character:FindFirstChildOfClass("Tool")
+                if t then
+                    local tn = t.Name:lower()
+                    for _, mn in ipairs(MINE_TOOLS) do
+                        if tn:find(mn:lower(), 1, true) then return true end
+                    end
+                end
             end
         end
     end
-    currentMiningTarget = nearest; miningFailCount = 0
-    return nearest, nearestDist
+    return false
 end
 
-local function raycastGround(pos, ignoreList)
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Blacklist
-    params.FilterDescendantsInstances = ignoreList or {}
-    params.IgnoreWater = false
-    return workspace:Raycast(pos + Vector3.new(0,18,0), Vector3.new(0,-70,0), params)
+local function findBestCrystal()
+    local ch = me.Character
+    if not ch or not ch.PrimaryPart then return nil end
+    local myPos = ch.PrimaryPart.Position
+
+    -- tetap pakai target saat ini jika masih valid
+    if currentTarget and currentTarget.Parent
+       and failCount < 4
+       and not isOccupied(currentTarget)
+       and (currentTarget.Position - myPos).Magnitude < 290 then
+        return currentTarget
+    end
+
+    local best, bestVal = nil, math.huge
+    for _, obj in pairs(workspace:GetDescendants()) do
+        local sc = scorePart(obj)
+        if sc >= 6 and not isOccupied(obj) then
+            local d = (obj.Position - myPos).Magnitude
+            if d < 290 then
+                -- lebih dekat + skor lebih tinggi = lebih prioritas
+                local val = d - sc * 9
+                if val < bestVal then bestVal = val; best = obj end
+            end
+        end
+    end
+
+    currentTarget = best
+    failCount     = 0
+    return best
 end
 
-local function hasClearLine(fromPos, toPos, ignoreList)
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Blacklist
-    params.FilterDescendantsInstances = ignoreList or {}
-    local hit = workspace:Raycast(fromPos, toPos - fromPos, params)
-    return not hit or hit.Instance == nil
+local function groundRay(pos, ignoreList)
+    local p = RaycastParams.new()
+    p.FilterType = Enum.RaycastFilterType.Blacklist
+    p.FilterDescendantsInstances = ignoreList or {}
+    p.IgnoreWater = false
+    return workspace:Raycast(pos + Vector3.new(0,16,0), Vector3.new(0,-58,0), p)
 end
 
-local function getMiningStandPoint(crystal)
-    local char = player.Character
-    if not char or not char.PrimaryPart then return nil end
+-- Hitung titik berdiri di samping crystal (bukan di atasnya)
+local function getStandPoint(crystal)
+    local ch = me.Character
+    if not ch or not ch.PrimaryPart then return nil end
     local origin = crystal.Position
     local cw     = math.max(crystal.Size.X, crystal.Size.Z)
-    local radius = math.clamp(cw * 0.25 + 1.5, MINE_STOP_DISTANCE, 3.8)
-    local ignore = {char, crystal}
-    local bestPos, bestScore = nil, math.huge
-    for i = 1, 16 do
-        local angle  = math.pi * 2 * (i / 16)
-        local sample = origin + Vector3.new(math.cos(angle)*radius, 0, math.sin(angle)*radius)
-        local ground = raycastGround(sample, ignore)
-        if ground and ground.Instance and ground.Normal.Y > 0.55 then
-            local pos    = ground.Position + Vector3.new(0, 3, 0)
-            local hDelta = math.abs(pos.Y - char.PrimaryPart.Position.Y)
-            if hDelta < 10 and pos.Y - origin.Y < 4.5 then
-                local clear = hasClearLine(pos + Vector3.new(0,2,0), origin, ignore)
-                local distC = (Vector3.new(pos.X, origin.Y, pos.Z) - origin).Magnitude
-                local sc    = (pos - char.PrimaryPart.Position).Magnitude + math.abs(distC-radius)*4 + (clear and 0 or 12) + hDelta
-                if sc < bestScore then bestScore = sc; bestPos = pos end
+    local radius = math.clamp(cw * 0.28 + 1.3, STOP_DIST, 3.8)
+    local ignore = {ch, crystal}
+
+    local best, bestSc = nil, math.huge
+    for i = 1, 24 do
+        local a   = math.pi * 2 * (i / 24)
+        local smp = origin + Vector3.new(math.cos(a)*radius, 0, math.sin(a)*radius)
+        local gr  = groundRay(smp, ignore)
+        if gr and gr.Instance and gr.Normal.Y > 0.48 then
+            local pos = gr.Position + Vector3.new(0, 3.1, 0)
+            -- titik ini harus LEBIH RENDAH atau sejajar dengan pusat crystal
+            -- supaya player berdiri di sampingnya, bukan di atasnya
+            if pos.Y <= origin.Y + crystal.Size.Y * 0.5 then
+                local hDelta = math.abs(pos.Y - ch.PrimaryPart.Position.Y)
+                if hDelta < 14 then
+                    local distC = (Vector3.new(pos.X, origin.Y, pos.Z) - origin).Magnitude
+                    local sc    = (pos - ch.PrimaryPart.Position).Magnitude
+                                + math.abs(distC - radius) * 5
+                                + hDelta
+                    if sc < bestSc then bestSc = sc; best = pos end
+                end
             end
         end
     end
-    if bestPos then return bestPos end
-    local delta = char.PrimaryPart.Position - origin
-    local flat  = Vector3.new(delta.X, 0, delta.Z)
-    if flat.Magnitude < 1 then flat = Vector3.new(1,0,0) end
-    local fb     = origin + flat.Unit * radius
-    local ground = raycastGround(fb, ignore)
-    return ground and (ground.Position + Vector3.new(0,3,0)) or fb
+
+    if best then return best end
+
+    -- fallback: arah dari player ke crystal
+    local d    = ch.PrimaryPart.Position - origin
+    local flat = Vector3.new(d.X, 0, d.Z)
+    if flat.Magnitude < 0.4 then flat = Vector3.new(1,0,0) end
+    local fb = origin + flat.Unit * radius
+    local gr = groundRay(fb, ignore)
+    return gr and (gr.Position + Vector3.new(0,3.1,0)) or fb
 end
 
-local function moveToPosition(hum, targetPos, targetPart)
-    local char = player.Character
-    if not char or not char.PrimaryPart then return false end
-    
-    pcall(function()
-        VirtualInputManager:SendKeyEvent(true, Enum.KeyCode.LeftShift, false, game)
+-- Lompat yang benar-benar bekerja (bukan hanya set .Jump)
+local function doJump(hum)
+    task.spawn(function()
+        pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
+        task.wait(0.02)
+        pcall(function()
+            VIM:SendKeyEvent(true,  Enum.KeyCode.Space, false, game)
+            task.wait(0.13)
+            VIM:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
+        end)
     end)
-    
-    local path = PathfindingService:CreatePath({
-        AgentRadius = 1.9, AgentHeight = 5.2,
-        AgentCanJump = true, AgentCanClimb = true,
-        WaypointSpacing = MINE_SMOOTH_MOVE and 7 or 3,
-        Costs = {Water = 5},
+end
+
+local function moveToPos(hum, targetPos, targetPart)
+    local ch = me.Character
+    if not ch or not ch.PrimaryPart then return false end
+
+    pcall(function() VIM:SendKeyEvent(true, Enum.KeyCode.LeftShift, false, game) end)
+
+    local path = PFS:CreatePath({
+        AgentRadius   = 1.8,
+        AgentHeight   = 5.0,
+        AgentCanJump  = true,
+        AgentCanClimb = false,  -- false: cegah naik ke atas crystal
+        WaypointSpacing = CFG.smoothMove and 6 or 3,
+        Costs = {Water = 8},
     })
-    local ok = pcall(function() path:ComputeAsync(char.PrimaryPart.Position, targetPos) end)
+
+    local ok = pcall(function() path:ComputeAsync(ch.PrimaryPart.Position, targetPos) end)
     local wps
     if ok and path.Status == Enum.PathStatus.Success then
         wps = path:GetWaypoints()
     else
         wps = {{Position = targetPos, Action = Enum.PathWaypointAction.Walk}}
     end
-    
-    local orig     = hum.WalkSpeed
-    hum.WalkSpeed  = MINE_SMOOTH_MOVE and MINE_WALK_SPEED + math.random(-1,1) or MINE_WALK_SPEED
-    local lastPos  = char.PrimaryPart.Position
-    local stuckFor = 0
-    local success  = false
 
-    -- Random jump cadence: pick a random waypoint index to jump on
-    local jumpAt = math.random(2, math.max(2, math.floor(#wps * 0.45)))
+    local origSpeed = hum.WalkSpeed
+    hum.WalkSpeed   = WALK_SPEED + (CFG.timeJitter and math.random(-1,2) or 0)
 
-    for index, wp in ipairs(wps) do
-        if mode ~= "MINE" or not InstanceManager.Active then break end
+    local lastPos  = ch.PrimaryPart.Position
+    local stuckT   = 0
+    local arrived  = false
+
+    -- satu titik lompatan acak di tengah perjalanan
+    local jumpIdx  = (#wps > 3) and math.random(2, math.floor(#wps * 0.5)) or -1
+
+    for i, wp in ipairs(wps) do
+        if mode ~= "MINE" or not Manager.alive then break end
         if targetPart and not targetPart.Parent then break end
-        if wp.Action == Enum.PathWaypointAction.Jump then hum.Jump = true end
 
-        -- Randomized human-like jump while running between crystals
-        if index == jumpAt and math.random(1, 100) <= 55 then
-            hum.Jump = true
-            task.wait(0.05)
+        if wp.Action == Enum.PathWaypointAction.Jump then doJump(hum) end
+
+        -- lompat acak di waypoint yang sudah ditentukan
+        if i == jumpIdx and math.random() < 0.62 then
+            doJump(hum)
         end
 
-        -- Micro Path Jitter for Anti-Detection
-        local stepPos = wp.Position
-        if ANTI_DET_WAYPOINT_JITTER and index < #wps then
-            stepPos = wp.Position + Vector3.new(math.random(-4, 4)/10, 0, math.random(-4, 4)/10)
+        local step = wp.Position
+        if CFG.pathJitter and i < #wps then
+            step = wp.Position + Vector3.new((math.random()-0.5)*0.55, 0, (math.random()-0.5)*0.55)
         end
 
-        hum:MoveTo(stepPos)
-        local started = os.clock()
-        while mode == "MINE" and InstanceManager.Active and os.clock()-started < 4.5 do
-            task.wait(MINE_SMOOTH_MOVE and 0.08 or 0.15)
-            if not char.PrimaryPart then break end
-            local cur = char.PrimaryPart.Position
-            
-            -- Close boundary distance check
+        hum:MoveTo(step)
+
+        local t0 = os.clock()
+        while mode == "MINE" and Manager.alive and os.clock()-t0 < 5.5 do
+            task.wait(CFG.smoothMove and 0.07 or 0.13)
+            if not ch.PrimaryPart then break end
+            local cur = ch.PrimaryPart.Position
+
+            -- proximity check ke crystal
             if targetPart and targetPart.Parent then
-                local distToCrystal = (cur - targetPart.Position).Magnitude
+                local dc = (cur - targetPart.Position).Magnitude
                 local cw = math.max(targetPart.Size.X, targetPart.Size.Z)
-                if distToCrystal <= (cw * 0.5 + 2.2) then
-                    success = true
-                    break
-                end
+                if dc <= (cw * 0.5 + STOP_DIST + 0.3) then arrived = true; break end
             end
 
-            local reach = (MINE_SMOOTH_MOVE and index < #wps) and 5.2 or 1.0
+            local reach = (CFG.smoothMove and i < #wps) and 5.2 or 1.3
             if (cur - wp.Position).Magnitude <= reach then break end
-            if (cur - targetPos).Magnitude <= 1.0 then 
-                success = true
-                break 
-            end
-            
-            if (cur - lastPos).Magnitude < 0.2 then
-                stuckFor = stuckFor + (MINE_SMOOTH_MOVE and 0.08 or 0.15)
-                if stuckFor > 1.1 then
-                    hum.Jump = true
-                    local rec = targetPos - cur
-                    if rec.Magnitude < 0.1 then rec = Vector3.new(1,0,0) end
-                    hum:MoveTo(cur + rec.Unit * 5)
-                    task.wait(PATH_RETRY_DELAY)
+            if (cur - targetPos).Magnitude <= 1.3 then arrived = true; break end
+
+            if (cur - lastPos).Magnitude < 0.17 then
+                stuckT = stuckT + (CFG.smoothMove and 0.07 or 0.13)
+                if stuckT > 1.3 then
+                    doJump(hum)
+                    local dir = targetPos - cur
+                    local d2  = dir.Magnitude > 0.1 and dir.Unit or Vector3.new(1,0,0)
+                    hum:MoveTo(cur + d2 * 4.5)
+                    task.wait(0.35)
                     break
                 end
-            else stuckFor = 0; lastPos = cur end
+            else
+                stuckT  = 0
+                lastPos = cur
+            end
         end
-        if success then break end
+        if arrived then break end
     end
 
-    hum.WalkSpeed = orig
-    pcall(function()
-        VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game)
-    end)
-    
-    if success then return true end
-    return char.PrimaryPart and (char.PrimaryPart.Position - targetPos).Magnitude <= 1.5
+    hum.WalkSpeed = origSpeed
+    pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game) end)
+
+    if arrived then return true end
+    if not ch.PrimaryPart then return false end
+    return (ch.PrimaryPart.Position - targetPos).Magnitude <= 2.2
 end
 
 local function facePart(part)
-    local char = player.Character
-    if not char or not char.PrimaryPart or not part then return end
-    local pos = char.PrimaryPart.Position
+    local ch = me.Character
+    if not ch or not ch.PrimaryPart or not part then return end
+    local p = ch.PrimaryPart.Position
     pcall(function()
-        char:SetPrimaryPartCFrame(CFrame.lookAt(pos, Vector3.new(part.Position.X, pos.Y, part.Position.Z)))
+        ch:SetPrimaryPartCFrame(CFrame.lookAt(p, Vector3.new(part.Position.X, p.Y, part.Position.Z)))
     end)
 end
 
-local function mineRoutine()
-    miningActive = true
-    while mode == "MINE" and InstanceManager.Active do
-        task.wait(0.5)
-        if not InstanceManager.Active then break end
-        safeRun(function()
-            local char = player.Character
-            if not char or not char.PrimaryPart then return end
-            local hum = char:FindFirstChildOfClass("Humanoid")
+-- Mining main loop
+function mineRoutine()
+    mineActive = true
+    while mode == "MINE" and Manager.alive do
+        task.wait(0.45)
+        if not Manager.alive then break end
+
+        safe(function()
+            local ch = me.Character
+            if not ch or not ch.PrimaryPart then return end
+            local hum = ch:FindFirstChildOfClass("Humanoid")
             if not hum then return end
 
-            local crystal, dist = findNearestCrystal()
+            local crystal = findBestCrystal()
             if not crystal then
-                mineStatus.Text = "Status: Crystal not found"
-                warn("[MINE] Target crystal not found")
+                mineStatLbl.Text = "Status: Searching"
+                lg("[MINE] No crystal")
                 task.wait(3); return
             end
 
-            mineStatus.Text = "Status: Moving to target"
-            warn("[MINE] Heading to " .. crystal.Name)
+            -- cek occupied lagi tepat sebelum gerak
+            if isOccupied(crystal) then
+                lg("[MINE] Occupied, skipping")
+                currentTarget = nil; return
+            end
 
-            local tool = equipTool(MINE_TOOL_NAMES)
+            local tool = equipTool(MINE_TOOLS)
             if not tool then
-                mineStatus.Text = "Status: No tool found"
-                task.wait(3); return
+                mineStatLbl.Text = "Status: No tool"
+                task.wait(2); return
             end
 
-            -- Pre-check if already in mining proximity range
-            local needMove = true
-            if crystal and crystal.Parent then
-                local cur = char.PrimaryPart.Position
-                local cw = math.max(crystal.Size.X, crystal.Size.Z)
-                if (cur - crystal.Position).Magnitude <= (cw * 0.5 + 2.2) then
-                    needMove = false
+            local myPos = ch.PrimaryPart.Position
+            local cw    = math.max(crystal.Size.X, crystal.Size.Z)
+            local dist  = (myPos - crystal.Position).Magnitude
+
+            mineStatLbl.Text = "Status: Moving"
+            lg("[MINE] Moving to " .. crystal.Name .. " (" .. math.floor(dist) .. "m)")
+
+            local closeEnough = dist <= (cw * 0.5 + STOP_DIST + 0.6)
+
+            if not closeEnough then
+                local sp = getStandPoint(crystal)
+                if sp and (myPos - sp).Magnitude > 1.0 then
+                    local ok = moveToPos(hum, sp, crystal)
+                    if not ok then
+                        failCount = failCount + 1
+                        if failCount >= 4 then currentTarget = nil end
+                        task.wait(0.3); return
+                    end
                 end
             end
 
-            if needMove then
-                local standPoint = getMiningStandPoint(crystal)
-                if standPoint and (char.PrimaryPart.Position - standPoint).Magnitude > 1.2 then
-                    local arrived = moveToPosition(hum, standPoint, crystal)
-                    if not arrived then
-                        miningFailCount = miningFailCount + 1
-                        if miningFailCount >= 3 then currentMiningTarget = nil end
-                        task.wait(0.4); return
-                    end
+            -- nudge ke arah crystal setelah tiba supaya tidak "kurang maju"
+            local ch2 = me.Character
+            if ch2 and ch2.PrimaryPart and crystal.Parent then
+                local cur  = ch2.PrimaryPart.Position
+                local diff = crystal.Position - cur
+                local flat = Vector3.new(diff.X, 0, diff.Z)
+                if flat.Magnitude > 0.3 then
+                    local nudge = math.clamp(cw * 0.22, 0.35, 1.0)
+                    hum:MoveTo(cur + flat.Unit * nudge)
+                    task.wait(0.22)
                 end
             end
 
             facePart(crystal)
+
             local cam = workspace.CurrentCamera
-            if cam then
-                local aimPos = crystal.Position + Vector3.new(0, math.clamp(crystal.Size.Y*0.15, 0.5, 2.5), 0)
-                local screenPos, onScreen = cam:WorldToScreenPoint(aimPos)
-                if onScreen then
-                    local minedThisTarget = false
-                    
-                    mineStatus.Text = "Status: Harvesting"
-                    for i = 1, 7 do
-                        if mode ~= "MINE" or not InstanceManager.Active then break end
-                        if crystal.Parent == nil then minedThisTarget = true; break end
-                        facePart(crystal)
-                        
-                        -- Coordinate Jitter in Simulation Click
-                        local clickX = screenPos.X
-                        local clickY = screenPos.Y
-                        if ANTI_DET_COORD_JITTER then
-                            clickX = clickX + math.random(-8, 8)
-                            clickY = clickY + math.random(-8, 8)
-                        end
-                        
-                        pcall(function() VirtualUser:Button1Down(Vector2.new(clickX, clickY), cam.CFrame) end)
-                        
-                        -- Timing Randomization
-                        local clickDur = 0.15
-                        if ANTI_DET_TIME_JITTER then clickDur = 0.15 + (math.random(-2, 4) / 100) end
-                        task.wait(clickDur)
-                        
-                        pcall(function() VirtualUser:Button1Up(Vector2.new(clickX, clickY), cam.CFrame) end)
-                        
-                        local actDur = 0.3
-                        if ANTI_DET_TIME_JITTER then actDur = 0.3 + (math.random(-3, 6) / 100) end
-                        task.wait(actDur)
-                        
-                        pcall(function() tool:Activate() end)
-                    end
-                    
-                    if minedThisTarget or crystal.Parent == nil then
-                        crystalMinedCount = crystalMinedCount + 1
-                        updateActivityStats()
-                        mineStatus.Text = "Status: Active"
-                        warn("[MINE] Crystal successfully mined")
-                        currentMiningTarget = nil
-                        miningFailCount = 0
-                        
-                        -- Fatigue check after successful mining action
-                        performFatigueBreak(mineStatus)
-                    else
-                        miningHitCount = miningHitCount + 1
-                        if miningHitCount >= 3 then
-                            crystalMinedCount = crystalMinedCount + 1
-                            miningHitCount    = 0
-                            updateActivityStats()
-                        end
-                    end
-                else
-                    pcall(function() tool:Activate() end)
-                    task.wait(1)
+            if not cam then return end
+
+            local aimPos = crystal.Position + Vector3.new(0, math.clamp(crystal.Size.Y * 0.1, 0.25, 2.2), 0)
+            local sPx, onSc = cam:WorldToScreenPoint(aimPos)
+
+            mineStatLbl.Text = "Status: Mining"
+
+            local swings = 0
+            for s = 1, 9 do
+                if mode ~= "MINE" or not Manager.alive then break end
+                if not crystal.Parent then
+                    lg("[MINE] Crystal broke after " .. s .. " swings")
+                    break
+                end
+                facePart(crystal)
+
+                -- update screen pos setiap 3 swing
+                if s % 3 == 1 then
+                    local sp2, os2 = cam:WorldToScreenPoint(aimPos)
+                    if os2 then sPx = sp2; onSc = os2 end
+                end
+
+                if onSc then
+                    local cx = sPx.X + (CFG.coordJitter and math.random(-7,7) or 0)
+                    local cy = sPx.Y + (CFG.coordJitter and math.random(-5,6) or 0)
+                    pcall(function() VU:Button1Down(Vector2.new(cx,cy), cam.CFrame) end)
+                    task.wait(jitterT(0.11, 0.08))
+                    pcall(function() VU:Button1Up(Vector2.new(cx,cy), cam.CFrame) end)
+                end
+
+                pcall(function() tool:Activate() end)
+                swings = swings + 1
+                task.wait(jitterT(0.27, 0.1))
+            end
+
+            if not crystal.Parent or swings >= 8 then
+                mineCount = mineCount + 1
+                mineCntLbl.Text = "Crystals Mined: " .. mineCount
+                mineStatLbl.Text = "Status: Active"
+                lg("[MINE] Crystal #" .. mineCount .. " mined")
+                currentTarget = nil
+                failCount = 0; hitCount = 0
+                checkFatigue(mineStatLbl)
+            else
+                hitCount = hitCount + 1
+                if hitCount >= 5 then
+                    mineCount = mineCount + 1
+                    mineCntLbl.Text = "Crystals Mined: " .. mineCount
+                    hitCount = 0
+                    currentTarget = nil
                 end
             end
         end)
-        task.wait(0.5)
+
+        task.wait(0.4)
     end
-    miningActive = false
-end
-shared.MineRoutineFunction = mineRoutine
-
--- ==========================================
--- ADMIN / MODERATOR DETECTION ENGINE
--- ==========================================
-local ADMIN_KICK_ENABLED = true
-local ROBLOX_STAFF_GROUP = 1200769
-local ADMIN_NAME_PATTERNS = {
-    "moderator", "roblox_adm", "admin", "moderat", "rblxmod", "staffmod",
-    "gamemaster", "game_master",
-}
-local ADMIN_BADGE_IDS = {}
-
-local function isPlayerAdmin(p)
-    if not p or not p.Parent then return false end
-    -- Check Roblox official staff group membership
-    local inStaff = false
-    pcall(function()
-        inStaff = p:IsInGroup(ROBLOX_STAFF_GROUP)
-    end)
-    if inStaff then return true, "Roblox Staff Group" end
-
-    -- Check suspicious name patterns
-    local lname = (p.Name .. p.DisplayName):lower()
-    for _, pat in ipairs(ADMIN_NAME_PATTERNS) do
-        if lname:find(pat) then return true, "Name Pattern: " .. pat end
-    end
-
-    -- Check high group rank in game creator group (if game is group-owned)
-    pcall(function()
-        local creatorId = game.CreatorType == Enum.CreatorType.Group and game.CreatorId or nil
-        if creatorId then
-            local rank = p:GetRankInGroup(creatorId)
-            if rank >= 200 then
-                inStaff = true
-            end
-        end
-    end)
-    if inStaff then return true, "High Creator Group Rank" end
-
-    return false, nil
+    mineActive = false
 end
 
-local function handlePlayerCheck(p)
-    if p == player then return end
-    if not ADMIN_KICK_ENABLED then return end
-    task.wait(1.5) -- give time for player data to load
-    if not p or not p.Parent then return end
-    local isAdmin, reason = isPlayerAdmin(p)
-    if isAdmin then
-        warn("[SECURITY] Moderator detected: " .. p.Name .. " (" .. (reason or "unknown") .. "). Auto-stopping.")
-        -- Safely stop all activities first
-        mode = "OFF"
-        pcall(function() VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.Space, false, game) end)
-        pcall(function() VirtualInputManager:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game) end)
-        isSpacePressed = false
-        -- Kick self out of server to avoid detection
-        task.wait(0.5)
-        player:Kick("Disconnected for maintenance.")
-    end
-end
+-- ============================================================
+-- INIT
+-- ============================================================
+setPhase(0)
+updateRod()
 
--- Scan existing players on load
-for _, p in ipairs(Players:GetPlayers()) do
-    task.spawn(handlePlayerCheck, p)
-end
-
--- Hook into new joiners
-local adminConn = Players.PlayerAdded:Connect(function(p)
-    if not InstanceManager.Active then return end
-    task.spawn(handlePlayerCheck, p)
-end)
-table.insert(InstanceManager.Connections, adminConn)
-
--- ==========================================
--- PROGRAM INITIALIZATION
--- ==========================================
-setFishPhase(0)
-updateActivityStats()
-
-warn("=== CONSOLE LOADED ===")
-warn("File: autominingnazhan.lua v7.0")
-warn("Security: Anti-detection + Admin guard fully active")
-warn("Design: Premium minimalist dark theme")
+lg("=== finalv9.lua ready ===")
+lg("Rod: " .. RODS[selectedRod].name .. " | Anti-detect: ON")
