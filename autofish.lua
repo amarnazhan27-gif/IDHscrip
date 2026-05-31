@@ -1,21 +1,39 @@
-if shared.NH_v9 then pcall(shared.NH_v9.kill) end
+-- =============================================================================
+-- SYSTEM CONSOLE: PREMIUM AUTO-FISHING SYSTEM (v6.0)
+-- Optimized for Long-Term AFK | Extremely Lightweight | Anti-Lag
+-- Developed by nazhan
+-- =============================================================================
+
+if shared.NH_v6 then pcall(shared.NH_v6.kill) end
 
 local M = { c = {}, on = true }
 function M.kill()
 	M.on = false
 	for _, v in ipairs(M.c) do pcall(function() v:Disconnect() end) end
 	table.clear(M.c)
+	
+	-- Clean up local platform if any
+	local oldPlat = workspace:FindFirstChild("NH_FishingPlatform")
+	if oldPlat then pcall(function() oldPlat:Destroy() end) end
+	
+	-- Reset space key state
+	pcall(function()
+		local VIM = game:GetService("VirtualInputManager")
+		VIM:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
+	end)
 end
-shared.NH_v9 = M
+shared.NH_v6 = M
 
+-- Roblox Services
 local Players = game:GetService("Players")
 local RS      = game:GetService("RunService")
 local VIM     = game:GetService("VirtualInputManager")
 local VU      = game:GetService("VirtualUser")
-local PFS     = game:GetService("PathfindingService")
 local TS      = game:GetService("TweenService")
+local HTTP    = game:GetService("HttpService")
 local me      = Players.LocalPlayer
 
+-- Rod Profiles & Multipliers
 local RODS = {
 	{name="Basic Rod",   lure=1.00, prog=1.00},
 	{name="Party Rod",   lure=1.30, prog=1.08},
@@ -33,38 +51,19 @@ local RODS = {
 }
 local rodIdx = 1
 
+-- Global Configs & States
 local mode = "OFF"
-
 local FISH_TOOLS = {"Fishing Rod","Rod","Pancing","FishingRod"}
-local MINE_TOOLS = {"Pickaxe","Cangkul","Kapak","Mining","Pick","Hammer"}
-local CRYS_OK    = {"8sisi","Crystal","Kristal","Gem","Ore","Batu","Stone","mineral"}
-local CRYS_NO    = {
-	"lamp","light","glow","torch","lantern","bulb",
-	"tree","bush","grass","leaf","vine","flower","plant",
-	"wall","floor","ceiling","roof","prop","decor",
-	"fence","gate","door","window","sign","board",
-	"water","ocean","river","lake","pond",
-	"cloud","fog","sun","moon","star","sky",
-	"fire","flame","smoke","ember",
-	"spawn","zone","region","trigger","sensor",
-	"platform","road","path","bridge","stair","rail",
-	"house","building","room","ground","terrain","base",
-}
-
-local STOP_DIST  = 2.5
-local WALK_SPD   = 24
-local CAST_HOLD  = 1.8
 local BITE_WAIT  = 15.0
 local RECAST_DLY = 1.0
+local CAST_HOLD  = 1.8
 
 local CFG = {
 	timeJitter   = true,
 	coordJitter  = true,
-	pathJitter   = true,
 	fatigueBreak = true,
 	mouseAFK     = true,
 	adminGuard   = true,
-	smoothMove   = true,
 }
 
 local fishState   = "IDLE"
@@ -85,27 +84,160 @@ local wVel        = 0
 local castSess    = 0
 local idleAt      = os.clock()
 
-local mineActive    = false
-local miningLocked  = false
-local currentTarget = nil
-local failCount     = 0
-local hitCount      = 0
-local crystalCache  = {}
-local cacheAt       = 0
-
 local fishCount  = 0
-local mineCount  = 0
 local consoleOn  = false
 local _clog      = function() end
 local fatCount   = 0
-local fatNext    = math.random(14, 24)
+local fatNext    = math.random(15, 25)
 
-local _warn = warn
-local function lg(s) _warn(s); if consoleOn then _clog(tostring(s)) end end
-local function safe(fn) xpcall(fn, function(e) _warn("[ERR] "..tostring(e)) end) end
+-- Configuration File Support
+local CONFIG_FILE = "nazhan_fish_config.json"
+local webhookUrl = ""
+local webhookEnabled = false
+local autoResetEnabled = true
+local customSpots = {} -- Array of Vector3 components
 
+local function safe(fn) xpcall(fn, function(e) warn("[ERR] "..tostring(e)) end) end
+
+-- Teleport & Platform Configuration
+local PLATFORM_NAME = "NH_FishingPlatform"
+local function createLocalPlatform(pos)
+	local old = workspace:FindFirstChild(PLATFORM_NAME)
+	if old then pcall(function() old:Destroy() end) end
+	
+	local part = Instance.new("Part")
+	part.Name = PLATFORM_NAME
+	part.Size = Vector3.new(12, 1, 12)
+	part.Position = pos - Vector3.new(0, 3.2, 0)
+	part.Anchored = true
+	part.CanCollide = true
+	part.Material = Enum.Material.SmoothPlastic
+	part.Transparency = 0.5
+	part.Color = Color3.fromRGB(0, 170, 255)
+	
+	-- Rounded corner glow effect
+	local box = Instance.new("SelectionBox", part)
+	box.Color3 = Color3.fromRGB(0, 240, 255)
+	box.Adornee = part
+	box.LineThickness = 0.05
+	
+	part.Parent = workspace
+	return part
+end
+
+local function teleportTo(pos)
+	local char = me.Character
+	if not char then return end
+	local root = char:FindFirstChild("HumanoidRootPart")
+	if not root then return end
+	
+	createLocalPlatform(pos)
+	task.wait(0.1)
+	pcall(function()
+		root.CFrame = CFrame.new(pos)
+	end)
+end
+
+-- Preset Teleport Coordinates
+local PRESETS = {
+	{name = "Tengah Laut (Far Sea)", pos = Vector3.new(1800, 10, 1800)},
+	{name = "Ujung Map Barat (West)", pos = Vector3.new(-2200, 10, 200)},
+	{name = "Ujung Map Timur (East)", pos = Vector3.new(2200, 10, -200)},
+	{name = "Bawah Jembatan (Secret Bridge)", pos = Vector3.new(140, -4, -480)},
+	{name = "Pulau Karang (Reef Isle)", pos = Vector3.new(-1500, 8, 1600)},
+}
+
+-- Webhook Telemetry
+local function getMaskedName(str)
+	if #str <= 3 then return str end
+	return str:sub(1, 1) .. string.rep("*", #str - 2) .. str:sub(#str, #str)
+end
+
+local function sendDiscordWebhook(title, desc, colorHex)
+	if not webhookEnabled or webhookUrl == "" or not webhookUrl:find("discord.com/api/webhooks") then return end
+	
+	local colorCode = tonumber(colorHex:gsub("#", ""), 16) or 65535
+	local maskedUser = getMaskedName(me.Name)
+	local maskedUserId = getMaskedName(tostring(me.UserId))
+	
+	local embed = {
+		title = title,
+		description = desc,
+		color = colorCode,
+		fields = {
+			{name = "👤 Player", value = maskedUser .. " (" .. maskedUserId .. ")", inline = true},
+			{name = "🐟 Catches", value = tostring(fishCount) .. " Caught", inline = true},
+			{name = "🎣 Equipped", value = RODS[rodIdx].name, inline = true}
+		},
+		footer = {text = "System Console by nazhan"},
+		timestamp = DateTime.now():ToIsoDate()
+	}
+	
+	local payload = { embeds = { embed } }
+	local success, json = pcall(function() return HTTP:JSONEncode(payload) end)
+	if not success then return end
+	
+	task.spawn(function()
+		local headers = { ["Content-Type"] = "application/json" }
+		local req = (syn and syn.request) or (http and http.request) or http_request or request
+		if req then
+			pcall(function()
+				req({
+					Url = webhookUrl,
+					Method = "POST",
+					Headers = headers,
+					Body = json
+				})
+			end)
+		else
+			pcall(function()
+				HTTP:PostAsync(webhookUrl, json, Enum.HttpContentType.ApplicationJson)
+			end)
+		end
+	end)
+end
+
+-- Config Loading/Saving
+local function saveConfig()
+	local data = {
+		webhookUrl = webhookUrl,
+		webhookEnabled = webhookEnabled,
+		selectedRodIndex = rodIdx,
+		customSpots = customSpots,
+		autoReset = autoResetEnabled,
+		adminGuard = CFG.adminGuard,
+		antiAFK = CFG.mouseAFK,
+	}
+	pcall(function()
+		if writefile then
+			writefile(CONFIG_FILE, HTTP:JSONEncode(data))
+		end
+	end)
+end
+
+local function loadConfig()
+	pcall(function()
+		if isfile and isfile(CONFIG_FILE) and readfile then
+			local raw = readfile(CONFIG_FILE)
+			local data = HTTP:JSONDecode(raw)
+			if data then
+				if data.webhookUrl then webhookUrl = data.webhookUrl end
+				if data.webhookEnabled ~= nil then webhookEnabled = data.webhookEnabled end
+				if data.selectedRodIndex then rodIdx = data.selectedRodIndex end
+				if data.customSpots then customSpots = data.customSpots end
+				if data.autoReset ~= nil then autoResetEnabled = data.autoReset end
+				if data.adminGuard ~= nil then CFG.adminGuard = data.adminGuard end
+				if data.antiAFK ~= nil then CFG.mouseAFK = data.antiAFK end
+			end
+		end
+	end)
+end
+
+loadConfig()
+
+-- GUI Cleanup
 pcall(function()
-	for _, n in ipairs({"NH_v9_GUI","AppleFarmUI","IH_v5"}) do
+	for _, n in ipairs({"NH_v6_GUI", "IH_v5", "NH_v9_GUI"}) do
 		local a = game:GetService("CoreGui"):FindFirstChild(n)
 		if a then a:Destroy() end
 		if me.PlayerGui then
@@ -115,1242 +247,1365 @@ pcall(function()
 	end
 end)
 
-task.wait(math.random() * 0.18)
-
+-- GUI Setup
 local gui = Instance.new("ScreenGui")
-gui.Name = "NH_v9_GUI"
+gui.Name = "NH_v6_GUI"
 gui.ResetOnSpawn = false
-gui.DisplayOrder = 12
+gui.DisplayOrder = 15
 if not pcall(function() gui.Parent = game:GetService("CoreGui") end) then
 	gui.Parent = me:WaitForChild("PlayerGui")
 end
 
+-- Premium Dark Theme Frame
 local main = Instance.new("Frame", gui)
-main.Size = UDim2.new(0, 308, 0, 368)
-main.Position = UDim2.new(1, -324, 0.16, 0)
-main.BackgroundColor3 = Color3.fromRGB(17, 17, 21)
-main.BackgroundTransparency = 0.07
+main.Size = UDim2.new(0, 320, 0, 420)
+main.Position = UDim2.new(0.5, -160, 0.5, -210)
+main.BackgroundColor3 = Color3.fromRGB(10, 11, 14)
+main.BackgroundTransparency = 0.05
 main.BorderSizePixel = 0
 main.Active = true
 main.Draggable = true
-Instance.new("UICorner", main).CornerRadius = UDim.new(0, 14)
-local ms = Instance.new("UIStroke", main)
-ms.Color = Color3.fromRGB(44, 44, 52)
-ms.Thickness = 1
+Instance.new("UICorner", main).CornerRadius = UDim.new(0, 12)
 
+-- Premium Subtle Border Gradient
+local mStroke = Instance.new("UIStroke", main)
+mStroke.Color = Color3.fromRGB(40, 42, 50)
+mStroke.Thickness = 1.5
+
+local gGradient = Instance.new("UIGradient", mStroke)
+gGradient.Color = ColorSequence.new({
+	ColorSequenceKeypoint.new(0, Color3.fromRGB(0, 240, 255)),
+	ColorSequenceKeypoint.new(0.5, Color3.fromRGB(180, 0, 255)),
+	ColorSequenceKeypoint.new(1, Color3.fromRGB(0, 240, 255))
+})
+
+-- Header
 local hdr = Instance.new("Frame", main)
-hdr.Size = UDim2.new(1, 0, 0, 56)
-hdr.BackgroundColor3 = Color3.fromRGB(22, 22, 27)
-hdr.BackgroundTransparency = 0.1
+hdr.Size = UDim2.new(1, 0, 0, 52)
+hdr.BackgroundColor3 = Color3.fromRGB(15, 17, 22)
 hdr.BorderSizePixel = 0
-Instance.new("UICorner", hdr).CornerRadius = UDim.new(0, 14)
-local hLine = Instance.new("Frame", hdr)
-hLine.Size = UDim2.new(1, 0, 0, 1)
-hLine.Position = UDim2.new(0, 0, 1, -1)
-hLine.BackgroundColor3 = Color3.fromRGB(34, 34, 42)
-hLine.BorderSizePixel = 0
+Instance.new("UICorner", hdr).CornerRadius = UDim.new(0, 12)
 
-local titleL = Instance.new("TextLabel", hdr)
-titleL.Size = UDim2.new(1, -72, 0, 22)
-titleL.Position = UDim2.new(0, 14, 0, 7)
-titleL.BackgroundTransparency = 1
-titleL.Text = "System Console"
-titleL.TextColor3 = Color3.fromRGB(232, 232, 241)
-titleL.Font = Enum.Font.GothamBold
-titleL.TextSize = 14
-titleL.TextXAlignment = Enum.TextXAlignment.Left
+-- Header separator
+local hs = Instance.new("Frame", hdr)
+hs.Size = UDim2.new(1, 0, 0, 1)
+hs.Position = UDim2.new(0, 0, 1, -1)
+hs.BackgroundColor3 = Color3.fromRGB(28, 30, 38)
+hs.BorderSizePixel = 0
 
-local byL = Instance.new("TextLabel", hdr)
-byL.Size = UDim2.new(1, -72, 0, 16)
-byL.Position = UDim2.new(0, 15, 0, 30)
-byL.BackgroundTransparency = 1
-byL.Text = "by nazhan"
-byL.TextColor3 = Color3.fromRGB(78, 78, 92)
-byL.Font = Enum.Font.Gotham
-byL.TextSize = 11
-byL.TextXAlignment = Enum.TextXAlignment.Left
+local title = Instance.new("TextLabel", hdr)
+title.Size = UDim2.new(1, -60, 0, 24)
+title.Position = UDim2.new(0, 14, 0, 6)
+title.BackgroundTransparency = 1
+title.Text = "System Console"
+title.TextColor3 = Color3.fromRGB(240, 242, 248)
+title.Font = Enum.Font.GothamBold
+title.TextSize = 15
+title.TextXAlignment = Enum.TextXAlignment.Left
 
+local subtitle = Instance.new("TextLabel", hdr)
+subtitle.Size = UDim2.new(1, -60, 0, 14)
+subtitle.Position = UDim2.new(0, 14, 0, 28)
+subtitle.BackgroundTransparency = 1
+subtitle.Text = "Premium Fishing Hub • by nazhan"
+subtitle.TextColor3 = Color3.fromRGB(0, 200, 255)
+subtitle.Font = Enum.Font.GothamMedium
+subtitle.TextSize = 10
+subtitle.TextXAlignment = Enum.TextXAlignment.Left
+
+-- Hide/Minimize Button
 local hideBtn = Instance.new("TextButton", hdr)
-hideBtn.Size = UDim2.new(0, 50, 0, 22)
-hideBtn.Position = UDim2.new(1, -58, 0.5, -11)
-hideBtn.BackgroundColor3 = Color3.fromRGB(28, 28, 36)
+hideBtn.Size = UDim2.new(0, 48, 0, 24)
+hideBtn.Position = UDim2.new(1, -62, 0.5, -12)
+hideBtn.BackgroundColor3 = Color3.fromRGB(24, 26, 33)
 hideBtn.Text = "Hide"
-hideBtn.TextColor3 = Color3.fromRGB(145, 145, 156)
-hideBtn.Font = Enum.Font.GothamMedium
-hideBtn.TextSize = 11
+hideBtn.TextColor3 = Color3.fromRGB(150, 155, 170)
+hideBtn.Font = Enum.Font.GothamBold
+hideBtn.TextSize = 10
 hideBtn.BorderSizePixel = 0
 Instance.new("UICorner", hideBtn).CornerRadius = UDim.new(0, 6)
+local hbStr = Instance.new("UIStroke", hideBtn)
+hbStr.Color = Color3.fromRGB(44, 46, 55)
+hbStr.Thickness = 1
 
+-- Hover feedback on Hide
+hideBtn.MouseEnter:Connect(function() TS:Create(hideBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(35, 38, 48)}):Play() end)
+hideBtn.MouseLeave:Connect(function() TS:Create(hideBtn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(24, 26, 33)}):Play() end)
+
+-- Float button
 local floatBtn = Instance.new("TextButton", gui)
-floatBtn.Size = UDim2.new(0, 52, 0, 52)
-floatBtn.Position = UDim2.new(1, -66, 0.16, 0)
-floatBtn.BackgroundColor3 = Color3.fromRGB(17, 17, 21)
-floatBtn.Text = "IH"
-floatBtn.TextColor3 = Color3.fromRGB(216, 216, 228)
-floatBtn.Font = Enum.Font.GothamBold
-floatBtn.TextSize = 14
+floatBtn.Size = UDim2.new(0, 50, 0, 50)
+floatBtn.Position = UDim2.new(1, -65, 0.15, 0)
+floatBtn.BackgroundColor3 = Color3.fromRGB(12, 13, 17)
+floatBtn.Text = "🎣"
+floatBtn.TextSize = 20
 floatBtn.BorderSizePixel = 0
 floatBtn.Visible = false
 Instance.new("UICorner", floatBtn).CornerRadius = UDim.new(1, 0)
-local fbs = Instance.new("UIStroke", floatBtn)
-fbs.Color = Color3.fromRGB(46, 46, 55)
-fbs.Thickness = 1
+local fbStr = Instance.new("UIStroke", floatBtn)
+fbStr.Color = Color3.fromRGB(0, 200, 255)
+fbStr.Thickness = 1.5
 
-local mainPos = UDim2.new(1, -324, 0.16, 0)
-local hidePos = UDim2.new(1,   56, 0.16, 0)
-local isHid   = false
+local isMin = false
+local originalPos = main.Position
 
-local function setHide(h)
-	isHid = h
-	if h then
-		TS:Create(main, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Position=hidePos}):Play()
-		task.delay(0.26, function() if isHid then main.Visible=false; floatBtn.Visible=true end end)
+local function toggleMinimize(min)
+	isMin = min
+	if min then
+		originalPos = main.Position
+		TS:Create(main, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Position = UDim2.new(1, 50, 0.15, 0)}):Play()
+		task.delay(0.26, function()
+			if isMin then
+				main.Visible = false
+				floatBtn.Visible = true
+			end
+		end)
 	else
-		main.Visible=true; floatBtn.Visible=false
-		TS:Create(main, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Position=mainPos}):Play()
+		main.Visible = true
+		floatBtn.Visible = false
+		TS:Create(main, TweenInfo.new(0.25, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {Position = originalPos}):Play()
 	end
 end
-hideBtn.MouseButton1Click:Connect(function() setHide(true) end)
-floatBtn.MouseButton1Click:Connect(function() setHide(false) end)
 
+hideBtn.MouseButton1Click:Connect(function() toggleMinimize(true) end)
+floatBtn.MouseButton1Click:Connect(function() toggleMinimize(false) end)
+
+-- Tab Navigation
 local tabBar = Instance.new("Frame", main)
-tabBar.Size = UDim2.new(1, 0, 0, 34)
-tabBar.Position = UDim2.new(0, 0, 0, 56)
-tabBar.BackgroundColor3 = Color3.fromRGB(20, 20, 24)
-tabBar.BackgroundTransparency = 0.14
+tabBar.Size = UDim2.new(1, 0, 0, 36)
+tabBar.Position = UDim2.new(0, 0, 0, 52)
+tabBar.BackgroundColor3 = Color3.fromRGB(12, 14, 18)
 tabBar.BorderSizePixel = 0
-local tbDiv = Instance.new("Frame", tabBar)
-tbDiv.Size = UDim2.new(1, 0, 0, 1)
-tbDiv.Position = UDim2.new(0, 0, 1, -1)
-tbDiv.BackgroundColor3 = Color3.fromRGB(32, 32, 40)
-tbDiv.BorderSizePixel = 0
-local tabLine = Instance.new("Frame", tabBar)
-tabLine.Size = UDim2.new(0.25, 0, 0, 2)
-tabLine.Position = UDim2.new(0, 0, 1, -2)
-tabLine.BackgroundColor3 = Color3.fromRGB(0, 114, 255)
-tabLine.BorderSizePixel = 0
-Instance.new("UICorner", tabLine).CornerRadius = UDim.new(1, 0)
 
-local TABS  = {"Fishing","Mining","Settings","Console"}
-local tBtns = {}
+local tLine = Instance.new("Frame", tabBar)
+tLine.Size = UDim2.new(1, 0, 0, 1)
+tLine.Position = UDim2.new(0, 0, 1, -1)
+tLine.BackgroundColor3 = Color3.fromRGB(24, 26, 33)
+tLine.BorderSizePixel = 0
+
+local indicator = Instance.new("Frame", tabBar)
+indicator.Size = UDim2.new(0.25, 0, 0, 2)
+indicator.Position = UDim2.new(0, 0, 1, -2)
+indicator.BackgroundColor3 = Color3.fromRGB(0, 200, 255)
+indicator.BorderSizePixel = 0
+
+local TABS = {"Main", "Teleports", "Settings", "Webhook"}
+local tabBtns = {}
 local panels = {}
 
-local content = Instance.new("Frame", main)
-content.Size = UDim2.new(1, 0, 1, -90)
-content.Position = UDim2.new(0, 0, 0, 90)
-content.BackgroundTransparency = 1
-content.ClipsDescendants = true
+local container = Instance.new("Frame", main)
+container.Size = UDim2.new(1, 0, 1, -88)
+container.Position = UDim2.new(0, 0, 0, 88)
+container.BackgroundTransparency = 1
+container.ClipsDescendants = true
 
-for i, n in ipairs(TABS) do
+for i, tName in ipairs(TABS) do
 	local b = Instance.new("TextButton", tabBar)
 	b.Size = UDim2.new(0.25, 0, 1, -2)
-	b.Position = UDim2.new((i-1)*0.25, 0, 0, 0)
+	b.Position = UDim2.new((i - 1) * 0.25, 0, 0, 0)
 	b.BackgroundTransparency = 1
-	b.Text = n
-	b.TextColor3 = i==1 and Color3.fromRGB(228,228,240) or Color3.fromRGB(118,118,130)
+	b.Text = tName
+	b.TextColor3 = i == 1 and Color3.fromRGB(240, 242, 248) or Color3.fromRGB(110, 115, 130)
 	b.Font = Enum.Font.GothamMedium
-	b.TextSize = 11
+	b.TextSize = 10.5
 	b.BorderSizePixel = 0
-	tBtns[n] = b
-	local p = Instance.new("Frame", content)
+	tabBtns[tName] = b
+	
+	local p = Instance.new("Frame", container)
 	p.Size = UDim2.new(1, 0, 1, 0)
 	p.BackgroundTransparency = 1
-	p.Visible = i==1
-	panels[n] = p
+	p.Visible = (i == 1)
+	panels[tName] = p
 end
 
-local function switchTab(n)
-	local i = table.find(TABS, n)
-	TS:Create(tabLine, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {Position=UDim2.new((i-1)*0.25,0,1,-2)}):Play()
-	for k,b in pairs(tBtns) do
-		b.TextColor3 = k==n and Color3.fromRGB(228,228,240) or Color3.fromRGB(118,118,130)
-		panels[k].Visible = k==n
+local function switchTab(tName)
+	local idx = table.find(TABS, tName)
+	TS:Create(indicator, TweenInfo.new(0.2, Enum.EasingStyle.Quad), {Position = UDim2.new((idx - 1) * 0.25, 0, 1, -2)}):Play()
+	for name, b in pairs(tabBtns) do
+		b.TextColor3 = (name == tName) and Color3.fromRGB(240, 242, 248) or Color3.fromRGB(110, 115, 130)
+		panels[name].Visible = (name == tName)
 	end
 end
-for n,b in pairs(tBtns) do b.MouseButton1Click:Connect(function() switchTab(n) end) end
 
-local function mkSep(par, y)
-	local s = Instance.new("Frame", par)
-	s.Size = UDim2.new(1, -22, 0, 1)
-	s.Position = UDim2.new(0, 11, 0, y)
-	s.BackgroundColor3 = Color3.fromRGB(32, 32, 40)
-	s.BorderSizePixel = 0
-	return s
+for tName, b in pairs(tabBtns) do
+	b.MouseButton1Click:Connect(function() switchTab(tName) end)
 end
 
-local function mkLbl(par, txt, y, sz, col)
-	local l = Instance.new("TextLabel", par)
-	l.Size = UDim2.new(1, -22, 0, 18)
-	l.Position = UDim2.new(0, 11, 0, y)
-	l.BackgroundTransparency = 1
-	l.Text = txt
-	l.TextColor3 = col or Color3.fromRGB(128,128,140)
-	l.Font = Enum.Font.GothamMedium
-	l.TextSize = sz or 12
-	l.TextXAlignment = Enum.TextXAlignment.Left
-	return l
+-- Dynamic Components Creator Helpers
+local function createSeparator(parent, y)
+	local sep = Instance.new("Frame", parent)
+	sep.Size = UDim2.new(1, -28, 0, 1)
+	sep.Position = UDim2.new(0, 14, 0, y)
+	sep.BackgroundColor3 = Color3.fromRGB(24, 26, 33)
+	sep.BorderSizePixel = 0
+	return sep
 end
 
-local function mkToggle(par, lbl, y, def, cb)
-	local row = Instance.new("Frame", par)
-	row.Size = UDim2.new(1, -22, 0, 30)
-	row.Position = UDim2.new(0, 11, 0, y)
+local function createCard(parent, size, pos, bgTrans)
+	local card = Instance.new("Frame", parent)
+	card.Size = size
+	card.Position = pos
+	card.BackgroundColor3 = Color3.fromRGB(16, 18, 23)
+	card.BackgroundTransparency = bgTrans or 0
+	card.BorderSizePixel = 0
+	Instance.new("UICorner", card).CornerRadius = UDim.new(0, 8)
+	local stroke = Instance.new("UIStroke", card)
+	stroke.Color = Color3.fromRGB(30, 32, 42)
+	stroke.Thickness = 1
+	return card, stroke
+end
+
+local function createLabel(parent, text, size, pos, font, sizePt, color)
+	local lbl = Instance.new("TextLabel", parent)
+	lbl.Size = size
+	lbl.Position = pos
+	lbl.BackgroundTransparency = 1
+	lbl.Text = text
+	lbl.TextColor3 = color or Color3.fromRGB(170, 175, 190)
+	lbl.Font = font or Enum.Font.GothamMedium
+	lbl.TextSize = sizePt or 11
+	lbl.TextXAlignment = Enum.TextXAlignment.Left
+	lbl.TextTruncate = Enum.TextTruncate.AtEnd
+	return lbl
+end
+
+local function createToggle(parent, labelText, yPos, defaultValue, callback)
+	local row = Instance.new("Frame", parent)
+	row.Size = UDim2.new(1, -28, 0, 32)
+	row.Position = UDim2.new(0, 14, 0, yPos)
 	row.BackgroundTransparency = 1
-	local ll = Instance.new("TextLabel", row)
-	ll.Size = UDim2.new(1, -52, 1, 0)
-	ll.BackgroundTransparency = 1
-	ll.Text = lbl
-	ll.TextColor3 = Color3.fromRGB(192,192,204)
-	ll.Font = Enum.Font.GothamMedium
-	ll.TextSize = 12
-	ll.TextXAlignment = Enum.TextXAlignment.Left
-	ll.TextTruncate = Enum.TextTruncate.AtEnd
+	
+	local lbl = createLabel(row, labelText, UDim2.new(1, -60, 1, 0), UDim2.new(0, 0, 0, 0), Enum.Font.GothamMedium, 11, Color3.fromRGB(200, 205, 220))
+	
 	local sw = Instance.new("TextButton", row)
-	sw.Size = UDim2.new(0, 40, 0, 21)
-	sw.Position = UDim2.new(1, -40, 0.5, -10)
-	sw.BackgroundColor3 = def and Color3.fromRGB(42,184,78) or Color3.fromRGB(50,50,58)
-	sw.Text = ""; sw.BorderSizePixel = 0
+	sw.Size = UDim2.new(0, 38, 0, 20)
+	sw.Position = UDim2.new(1, -38, 0.5, -10)
+	sw.BackgroundColor3 = defaultValue and Color3.fromRGB(0, 170, 255) or Color3.fromRGB(34, 36, 45)
+	sw.Text = ""
+	sw.BorderSizePixel = 0
 	Instance.new("UICorner", sw).CornerRadius = UDim.new(1, 0)
+	local swStroke = Instance.new("UIStroke", sw)
+	swStroke.Color = defaultValue and Color3.fromRGB(0, 200, 255) or Color3.fromRGB(48, 50, 62)
+	swStroke.Thickness = 1
+	
 	local th = Instance.new("Frame", sw)
-	th.Size = UDim2.new(0, 17, 0, 17)
-	th.Position = def and UDim2.new(1,-19,0.5,-8.5) or UDim2.new(0,2,0.5,-8.5)
-	th.BackgroundColor3 = Color3.fromRGB(255,255,255)
+	th.Size = UDim2.new(0, 16, 0, 16)
+	th.Position = defaultValue and UDim2.new(1, -18, 0.5, -8) or UDim2.new(0, 2, 0.5, -8)
+	th.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
 	th.BorderSizePixel = 0
 	Instance.new("UICorner", th).CornerRadius = UDim.new(1, 0)
-	local on = def
+	
+	local val = defaultValue
 	sw.MouseButton1Click:Connect(function()
 		if not M.on then return end
-		on = not on
-		TS:Create(th, TweenInfo.new(0.15), {Position=on and UDim2.new(1,-19,0.5,-8.5) or UDim2.new(0,2,0.5,-8.5)}):Play()
-		TS:Create(sw, TweenInfo.new(0.15), {BackgroundColor3=on and Color3.fromRGB(42,184,78) or Color3.fromRGB(50,50,58)}):Play()
-		cb(on)
+		val = not val
+		TS:Create(th, TweenInfo.new(0.12, Enum.EasingStyle.Quad), {Position = val and UDim2.new(1, -18, 0.5, -8) or UDim2.new(0, 2, 0.5, -8)}):Play()
+		TS:Create(sw, TweenInfo.new(0.12, Enum.EasingStyle.Quad), {BackgroundColor3 = val and Color3.fromRGB(0, 170, 255) or Color3.fromRGB(34, 36, 45)}):Play()
+		TS:Create(swStroke, TweenInfo.new(0.12, Enum.EasingStyle.Quad), {Color = val and Color3.fromRGB(0, 200, 255) or Color3.fromRGB(48, 50, 62)}):Play()
+		callback(val)
 	end)
 	return sw, th
 end
 
--- ========== FISHING PANEL ==========
-local fp = panels["Fishing"]
+-- =============================================================================
+-- PANEL 1: MAIN PANEL
+-- =============================================================================
+local pMain = panels["Main"]
 
-local fStatL = mkLbl(fp, "Status: Idle", 10, 12, Color3.fromRGB(135,135,145))
-local fCntL  = mkLbl(fp, "Fish Caught: 0", 28, 11)
+-- Status Card
+local statusCard, scStroke = createCard(pMain, UDim2.new(1, -28, 0, 68), UDim2.new(0, 14, 0, 10))
+scStroke.Color = Color3.fromRGB(30, 32, 40)
 
-local pbBg = Instance.new("Frame", fp)
-pbBg.Size = UDim2.new(1, -22, 0, 4)
-pbBg.Position = UDim2.new(0, 11, 0, 54)
-pbBg.BackgroundColor3 = Color3.fromRGB(34,34,42)
-pbBg.BorderSizePixel = 0
-Instance.new("UICorner", pbBg).CornerRadius = UDim.new(1, 0)
-local pbFill = Instance.new("Frame", pbBg)
-pbFill.Size = UDim2.new(0, 0, 1, 0)
-pbFill.BackgroundColor3 = Color3.fromRGB(0,114,255)
-pbFill.BorderSizePixel = 0
-Instance.new("UICorner", pbFill).CornerRadius = UDim.new(1, 0)
+local stDot = Instance.new("Frame", statusCard)
+stDot.Size = UDim2.new(0, 8, 0, 8)
+stDot.Position = UDim2.new(0, 12, 0, 14)
+stDot.BackgroundColor3 = Color3.fromRGB(150, 155, 170)
+stDot.BorderSizePixel = 0
+Instance.new("UICorner", stDot).CornerRadius = UDim.new(1, 0)
 
-local phNm = {"Cast","Wait","Game","Done"}
-local phCl = {Color3.fromRGB(0,114,255), Color3.fromRGB(255,145,0), Color3.fromRGB(255,46,78), Color3.fromRGB(42,184,78)}
-local phLbs = {}
-for i = 1, 4 do
-	local l = Instance.new("TextLabel", fp)
-	l.Size = UDim2.new(0.25, 0, 0, 16)
-	l.Position = UDim2.new((i-1)*0.25 + 0.013, 0, 0, 60)
-	l.BackgroundTransparency = 1
-	l.Text = phNm[i]
-	l.TextColor3 = Color3.fromRGB(72,72,82)
-	l.Font = Enum.Font.GothamMedium
-	l.TextSize = 10
-	phLbs[i] = l
+-- Glowing status dot
+local stGlow = Instance.new("UIStroke", stDot)
+stGlow.Color = Color3.fromRGB(150, 155, 170)
+stGlow.Thickness = 2
+local dotPulse = TS:Create(stDot, TweenInfo.new(0.6, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), {BackgroundColor3 = Color3.fromRGB(255, 255, 255)})
+dotPulse:Play()
+
+local statusLbl = createLabel(statusCard, "Status: Idle", UDim2.new(1, -40, 0, 18), UDim2.new(0, 26, 0, 9), Enum.Font.GothamBold, 12, Color3.fromRGB(220, 225, 240))
+local statsRateLbl = createLabel(statusCard, "Fish Caught: 0 • Rate: 0.0/hr", UDim2.new(1, -24, 0, 16), UDim2.new(0, 12, 0, 28), Enum.Font.GothamMedium, 10.5, Color3.fromRGB(140, 145, 160))
+local statsTimeLbl = createLabel(statusCard, "Session Elapsed: 00:00:00", UDim2.new(1, -24, 0, 16), UDim2.new(0, 12, 0, 44), Enum.Font.Gotham, 10, Color3.fromRGB(100, 105, 120))
+
+-- Phase Progress Bar Indicator
+local phaseContainer = Instance.new("Frame", pMain)
+phaseContainer.Size = UDim2.new(1, -28, 0, 48)
+phaseContainer.Position = UDim2.new(0, 14, 0, 88)
+phaseContainer.BackgroundTransparency = 1
+
+local pbarBg = Instance.new("Frame", phaseContainer)
+pbarBg.Size = UDim2.new(1, 0, 0, 4)
+pbarBg.Position = UDim2.new(0, 0, 0, 8)
+pbarBg.BackgroundColor3 = Color3.fromRGB(24, 26, 33)
+pbarBg.BorderSizePixel = 0
+Instance.new("UICorner", pbarBg).CornerRadius = UDim.new(1, 0)
+
+local pbarFill = Instance.new("Frame", pbarBg)
+pbarFill.Size = UDim2.new(0, 0, 1, 0)
+pbarFill.BackgroundColor3 = Color3.fromRGB(0, 170, 255)
+pbarFill.BorderSizePixel = 0
+Instance.new("UICorner", pbarFill).CornerRadius = UDim.new(1, 0)
+
+local phases = {"Cast", "Wait", "Game", "Done"}
+local phaseColors = {
+	Color3.fromRGB(0, 170, 255),
+	Color3.fromRGB(255, 170, 0),
+	Color3.fromRGB(255, 40, 100),
+	Color3.fromRGB(0, 204, 100)
+}
+local phaseLbls = {}
+
+for idx, pName in ipairs(phases) do
+	local lbl = Instance.new("TextLabel", phaseContainer)
+	lbl.Size = UDim2.new(0.25, 0, 0, 18)
+	lbl.Position = UDim2.new((idx - 1) * 0.25, 0, 0, 16)
+	lbl.BackgroundTransparency = 1
+	lbl.Text = pName
+	lbl.TextColor3 = Color3.fromRGB(80, 85, 95)
+	lbl.Font = Enum.Font.GothamBold
+	lbl.TextSize = 9.5
+	phaseLbls[idx] = lbl
 end
 
 local activePhase = 0
-local function setPhase(ph)
+local function setPhaseIndicator(ph)
 	activePhase = ph
 	for i = 1, 4 do
-		if i < ph then phLbs[i].TextColor3 = Color3.fromRGB(140,140,150)
-		elseif i == ph then phLbs[i].TextColor3 = phCl[i]
-		else phLbs[i].TextColor3 = Color3.fromRGB(70,70,80) end
+		if i < ph then
+			phaseLbls[i].TextColor3 = Color3.fromRGB(150, 155, 170)
+		elseif i == ph then
+			phaseLbls[i].TextColor3 = phaseColors[i]
+		else
+			phaseLbls[i].TextColor3 = Color3.fromRGB(60, 65, 75)
+		end
 	end
 	if ph == 0 then
-		TS:Create(pbFill, TweenInfo.new(0.16), {Size=UDim2.new(0,0,1,0), BackgroundColor3=Color3.fromRGB(0,114,255)}):Play()
+		TS:Create(pbarFill, TweenInfo.new(0.15), {Size = UDim2.new(0, 0, 1, 0), BackgroundColor3 = Color3.fromRGB(0, 170, 255)}):Play()
 	else
-		TS:Create(pbFill, TweenInfo.new(0.16), {
-			Size=UDim2.new(math.clamp(ph*0.25,0,1),0,1,0),
-			BackgroundColor3=phCl[ph]
+		TS:Create(pbarFill, TweenInfo.new(0.15), {
+			Size = UDim2.new(math.clamp(ph * 0.25, 0, 1), 0, 1, 0),
+			BackgroundColor3 = phaseColors[ph]
 		}):Play()
 	end
 end
-local function setPBar(f)
+
+local function setPbarPercent(fraction)
 	if activePhase <= 0 then return end
-	pbFill.Size = UDim2.new(math.clamp((activePhase-1)*0.25 + f*0.25,0,1), 0, 1, 0)
+	local baseWidth = (activePhase - 1) * 0.25
+	pbarFill.Size = UDim2.new(math.clamp(baseWidth + fraction * 0.25, 0, 1), 0, 1, 0)
 end
 
-mkSep(fp, 82)
+-- Rod Selection Card
+local rodCard, rcStroke = createCard(pMain, UDim2.new(1, -28, 0, 56), UDim2.new(0, 14, 0, 146))
+rcStroke.Color = Color3.fromRGB(24, 26, 33)
 
-local rodBox = Instance.new("Frame", fp)
-rodBox.Size = UDim2.new(1, -22, 0, 50)
-rodBox.Position = UDim2.new(0, 11, 0, 88)
-rodBox.BackgroundColor3 = Color3.fromRGB(23,23,28)
-rodBox.BorderSizePixel = 0
-Instance.new("UICorner", rodBox).CornerRadius = UDim.new(0, 9)
-local rbSt = Instance.new("UIStroke", rodBox)
-rbSt.Color = Color3.fromRGB(38,38,46)
-rbSt.Thickness = 1
+createLabel(rodCard, "Fishing Rod", UDim2.new(1, -20, 0, 16), UDim2.new(0, 12, 0, 6), Enum.Font.GothamBold, 9.5, Color3.fromRGB(100, 105, 120))
+local rodNameLbl = createLabel(rodCard, RODS[rodIdx].name, UDim2.new(1, -80, 0, 22), UDim2.new(0, 42, 0, 24), Enum.Font.GothamMedium, 12, Color3.fromRGB(0, 200, 255))
+local rodStatsLbl = createLabel(rodCard, "Lure: 100% | Speed Multiplier: 1.00", UDim2.new(1, -24, 0, 14), UDim2.new(0, 12, 0, 40), Enum.Font.Gotham, 8.5, Color3.fromRGB(110, 115, 130))
 
-local rodHdr = Instance.new("TextLabel", rodBox)
-rodHdr.Size = UDim2.new(1, 0, 0, 16)
-rodHdr.Position = UDim2.new(0, 10, 0, 4)
-rodHdr.BackgroundTransparency = 1
-rodHdr.Text = "Rod Selection"
-rodHdr.TextColor3 = Color3.fromRGB(82,82,94)
-rodHdr.Font = Enum.Font.GothamMedium
-rodHdr.TextSize = 10
-rodHdr.TextXAlignment = Enum.TextXAlignment.Left
-
-local prevRod = Instance.new("TextButton", rodBox)
+local prevRod = Instance.new("TextButton", rodCard)
 prevRod.Size = UDim2.new(0, 24, 0, 22)
-prevRod.Position = UDim2.new(0, 6, 1, -28)
-prevRod.BackgroundColor3 = Color3.fromRGB(28,28,35)
-prevRod.Text = "<"; prevRod.TextColor3 = Color3.fromRGB(172,172,182)
-prevRod.Font = Enum.Font.GothamBold; prevRod.TextSize = 13
+prevRod.Position = UDim2.new(0, 10, 0, 22)
+prevRod.BackgroundColor3 = Color3.fromRGB(24, 26, 33)
+prevRod.Text = "‹"
+prevRod.TextColor3 = Color3.fromRGB(200, 205, 220)
+prevRod.Font = Enum.Font.GothamBold
+prevRod.TextSize = 14
 prevRod.BorderSizePixel = 0
 Instance.new("UICorner", prevRod).CornerRadius = UDim.new(0, 5)
+local prStr = Instance.new("UIStroke", prevRod)
+prStr.Color = Color3.fromRGB(44, 46, 55)
 
-local nextRod = Instance.new("TextButton", rodBox)
+local nextRod = Instance.new("TextButton", rodCard)
 nextRod.Size = UDim2.new(0, 24, 0, 22)
-nextRod.Position = UDim2.new(1, -30, 1, -28)
-nextRod.BackgroundColor3 = Color3.fromRGB(28,28,35)
-nextRod.Text = ">"; nextRod.TextColor3 = Color3.fromRGB(172,172,182)
-nextRod.Font = Enum.Font.GothamBold; nextRod.TextSize = 13
+nextRod.Position = UDim2.new(1, -34, 0, 22)
+nextRod.BackgroundColor3 = Color3.fromRGB(24, 26, 33)
+nextRod.Text = "›"
+nextRod.TextColor3 = Color3.fromRGB(200, 205, 220)
+nextRod.Font = Enum.Font.GothamBold
+nextRod.TextSize = 14
 nextRod.BorderSizePixel = 0
 Instance.new("UICorner", nextRod).CornerRadius = UDim.new(0, 5)
+local nrStr = Instance.new("UIStroke", nextRod)
+nrStr.Color = Color3.fromRGB(44, 46, 55)
 
-local rodNameL = Instance.new("TextLabel", rodBox)
-rodNameL.Size = UDim2.new(1, -64, 0, 22)
-rodNameL.Position = UDim2.new(0, 36, 1, -28)
-rodNameL.BackgroundTransparency = 1
-rodNameL.Text = RODS[1].name
-rodNameL.TextColor3 = Color3.fromRGB(215,215,226)
-rodNameL.Font = Enum.Font.GothamMedium
-rodNameL.TextSize = 12
-
-local rodStatL = mkLbl(fp, "Lure: 100%  |  Progress: 100%", 142, 10, Color3.fromRGB(78,78,92))
-
-local function updateRod()
+local function updateRodDisplay()
 	local r = RODS[rodIdx]
-	rodNameL.Text = r.name
-	rodStatL.Text = string.format("Lure: %d%%  |  Progress: %d%%", math.floor(r.lure*100), math.floor(r.prog*100))
+	rodNameLbl.Text = r.name
+	rodStatsLbl.Text = string.format("Lure Multiplier: %.2fx  |  Progress Multiplier: %.2fx", r.lure, r.prog)
+	saveConfig()
 end
-prevRod.MouseButton1Click:Connect(function() rodIdx = rodIdx<=1 and #RODS or rodIdx-1; updateRod() end)
-nextRod.MouseButton1Click:Connect(function() rodIdx = rodIdx>=#RODS and 1 or rodIdx+1; updateRod() end)
 
-mkSep(fp, 162)
+prevRod.MouseButton1Click:Connect(function()
+	rodIdx = (rodIdx <= 1) and #RODS or rodIdx - 1
+	updateRodDisplay()
+end)
+nextRod.MouseButton1Click:Connect(function()
+	rodIdx = (rodIdx >= #RODS) and 1 or rodIdx + 1
+	updateRodDisplay()
+end)
 
-local fishSw = mkToggle(fp, "Fishing System", 168, false, function(on)
-	if on then
-		if mode=="MINE" then mode="OFF" end
-		mode="FISH"; fishState="IDLE"; idleAt=os.clock()
-		fStatL.Text="Status: Starting"
+-- Main Toggle Switch
+local toggleCard, tcStroke = createCard(pMain, UDim2.new(1, -28, 0, 50), UDim2.new(0, 14, 0, 212))
+tcStroke.Color = Color3.fromRGB(24, 26, 33)
+
+local function updateStatusUI(statusText, isRunning)
+	statusLbl.Text = "Status: " .. statusText
+	dotPulse:Cancel()
+	if isRunning then
+		stDot.BackgroundColor3 = Color3.fromRGB(0, 230, 120)
+		stGlow.Color = Color3.fromRGB(0, 230, 120)
+		dotPulse = TS:Create(stDot, TweenInfo.new(0.6, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), {BackgroundColor3 = Color3.fromRGB(200, 255, 220)})
+		dotPulse:Play()
 	else
-		mode="OFF"; isSpace=false
+		stDot.BackgroundColor3 = Color3.fromRGB(150, 155, 170)
+		stGlow.Color = Color3.fromRGB(150, 155, 170)
+		dotPulse = TS:Create(stDot, TweenInfo.new(0.6, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true), {BackgroundColor3 = Color3.fromRGB(240, 240, 240)})
+		dotPulse:Play()
+	end
+end
+
+-- Watchdog variable definition
+local doResetFish
+
+local mainToggle = createToggle(toggleCard, "Auto-Fishing Engine", 9, false, function(on)
+	if on then
+		mode = "FISH"
+		fishState = "IDLE"
+		idleAt = os.clock()
+		updateStatusUI("Starting...", true)
+	else
+		mode = "OFF"
+		isSpace = false
 		pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.Space, false, game) end)
-		fStatL.Text="Status: Idle"; setPhase(0)
+		updateStatusUI("Idle", false)
+		setPhaseIndicator(0)
 	end
 end)
 
-local rstBtn = Instance.new("TextButton", fp)
-rstBtn.Size = UDim2.new(0, 76, 0, 22)
-rstBtn.Position = UDim2.new(1, -88, 0, 200)
-rstBtn.BackgroundColor3 = Color3.fromRGB(28,28,36)
-rstBtn.Text = "Reset"
-rstBtn.TextColor3 = Color3.fromRGB(160,160,170)
-rstBtn.Font = Enum.Font.GothamMedium
-rstBtn.TextSize = 11
+-- Reset & Stats Control Panel
+local actionCard = createCard(pMain, UDim2.new(1, -28, 0, 50), UDim2.new(0, 14, 0, 272), 1)
+
+local rstBtn = Instance.new("TextButton", actionCard)
+rstBtn.Size = UDim2.new(0.5, -6, 1, 0)
+rstBtn.Position = UDim2.new(0, 0, 0, 0)
+rstBtn.BackgroundColor3 = Color3.fromRGB(26, 18, 22)
+rstBtn.Text = "Reset Fishing State"
+rstBtn.TextColor3 = Color3.fromRGB(255, 100, 120)
+rstBtn.Font = Enum.Font.GothamBold
+rstBtn.TextSize = 10.5
 rstBtn.BorderSizePixel = 0
 Instance.new("UICorner", rstBtn).CornerRadius = UDim.new(0, 6)
 local rstSt = Instance.new("UIStroke", rstBtn)
-rstSt.Color = Color3.fromRGB(44,44,52); rstSt.Thickness = 1
+rstSt.Color = Color3.fromRGB(60, 32, 40)
 
--- ========== MINING PANEL ==========
-local mp = panels["Mining"]
-
-local mStatL = mkLbl(mp, "Status: Idle", 10, 12, Color3.fromRGB(135,135,145))
-local mCntL  = mkLbl(mp, "Crystals Mined: 0", 28, 11)
-
-mkSep(mp, 52)
-
-local function mkNumRow(par, label, y, def, mn, mx, cb)
-	local row = Instance.new("Frame", par)
-	row.Size = UDim2.new(1,-22,0,30)
-	row.Position = UDim2.new(0,11,0,y)
-	row.BackgroundTransparency = 1
-	local ll = Instance.new("TextLabel", row)
-	ll.Size = UDim2.new(1,-84,1,0)
-	ll.BackgroundTransparency = 1
-	ll.Text = label
-	ll.TextColor3 = Color3.fromRGB(192,192,204)
-	ll.Font = Enum.Font.GothamMedium
-	ll.TextSize = 12
-	ll.TextXAlignment = Enum.TextXAlignment.Left
-	ll.TextTruncate = Enum.TextTruncate.AtEnd
-	local box = Instance.new("TextBox", row)
-	box.Size = UDim2.new(0, 74, 0, 22)
-	box.Position = UDim2.new(1,-78,0.5,-11)
-	box.BackgroundColor3 = Color3.fromRGB(24,24,31)
-	box.TextColor3 = Color3.fromRGB(225,225,235)
-	box.Text = tostring(def)
-	box.ClearTextOnFocus = false
-	box.Font = Enum.Font.Gotham
-	box.TextSize = 12
-	box.TextXAlignment = Enum.TextXAlignment.Center
-	box.BorderSizePixel = 0
-	Instance.new("UICorner", box).CornerRadius = UDim.new(0,6)
-	local bs = Instance.new("UIStroke", box)
-	bs.Color = Color3.fromRGB(44,44,53); bs.Thickness = 1
-	box.FocusLost:Connect(function()
-		local v = tonumber(box.Text)
-		if v then v=math.clamp(v,mn,mx); box.Text=string.format("%.1f",v); cb(v)
-		else box.Text=string.format("%.1f",def) end
-	end)
-	return box
-end
-
-mkNumRow(mp, "Mine Stop Range", 58, STOP_DIST, 1.5, 6.0, function(v) STOP_DIST=v end)
-
-local spRow = Instance.new("Frame", mp)
-spRow.Size = UDim2.new(1,-22,0,30)
-spRow.Position = UDim2.new(0,11,0,92)
-spRow.BackgroundTransparency = 1
-local spLbl = Instance.new("TextLabel", spRow)
-spLbl.Size = UDim2.new(1,-92,1,0)
-spLbl.BackgroundTransparency = 1
-spLbl.Text = "Walk / Sprint Speed"
-spLbl.TextColor3 = Color3.fromRGB(192,192,204)
-spLbl.Font = Enum.Font.GothamMedium
-spLbl.TextSize = 12
-spLbl.TextXAlignment = Enum.TextXAlignment.Left
-spLbl.TextTruncate = Enum.TextTruncate.AtEnd
-local spBtn = Instance.new("TextButton", spRow)
-spBtn.Size = UDim2.new(0, 84, 0, 22)
-spBtn.Position = UDim2.new(1,-88,0.5,-11)
-spBtn.BackgroundColor3 = Color3.fromRGB(24,24,31)
-spBtn.TextColor3 = Color3.fromRGB(225,225,235)
-spBtn.Text = "Sprint: 24"
-spBtn.Font = Enum.Font.GothamMedium
-spBtn.TextSize = 11
-spBtn.BorderSizePixel = 0
-Instance.new("UICorner", spBtn).CornerRadius = UDim.new(0,6)
-local spSt = Instance.new("UIStroke", spBtn)
-spSt.Color = Color3.fromRGB(44,44,53); spSt.Thickness = 1
-local spCyc = {{16,"Walk: 16"},{20,"Jog: 20"},{24,"Sprint: 24"}}
-local spI = 3
-spBtn.MouseButton1Click:Connect(function()
-	spI = spI%#spCyc+1; WALK_SPD=spCyc[spI][1]; spBtn.Text=spCyc[spI][2]
-end)
-
-mkSep(mp, 128)
-
-mkToggle(mp, "Smooth Movement", 134, true, function(v) CFG.smoothMove=v end)
-
-mkSep(mp, 170)
-
-local mineSw = mkToggle(mp, "Mining System", 176, false, function(on)
-	if on then
-		if mode=="FISH" then mode="OFF"; setPhase(0); fStatL.Text="Status: Idle" end
-		mode="MINE"; currentTarget=nil; failCount=0; hitCount=0; miningLocked=false
-		crystalCache={}; cacheAt=0
-		mStatL.Text="Status: Active"
-		if not mineActive then task.spawn(mineRoutine) end
-	else
-		mode="OFF"; mStatL.Text="Status: Idle"; miningLocked=false
-		pcall(function()
-			local h = me.Character and me.Character:FindFirstChildOfClass("Humanoid")
-			if h then h:SetStateEnabled(Enum.HumanoidStateType.Jumping, true) end
-			VIM:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game)
-		end)
+rstBtn.MouseButton1Click:Connect(function()
+	if doResetFish then
+		doResetFish()
+		_clog("Manual reset triggered")
 	end
 end)
 
--- ========== SETTINGS PANEL (ScrollingFrame agar tidak overflow) ==========
-local stSF = Instance.new("ScrollingFrame", panels["Settings"])
-stSF.Size = UDim2.new(1, 0, 1, 0)
-stSF.BackgroundTransparency = 1
-stSF.CanvasSize = UDim2.new(0,0,0,340)
-stSF.ScrollBarThickness = 2
-stSF.ScrollBarImageColor3 = Color3.fromRGB(48,48,58)
-stSF.BorderSizePixel = 0
+local rstStatsBtn = Instance.new("TextButton", actionCard)
+rstStatsBtn.Size = UDim2.new(0.5, -6, 1, 0)
+rstStatsBtn.Position = UDim2.new(0.5, 6, 0, 0)
+rstStatsBtn.BackgroundColor3 = Color3.fromRGB(20, 22, 28)
+rstStatsBtn.Text = "Reset Statistics"
+rstStatsBtn.TextColor3 = Color3.fromRGB(150, 155, 170)
+rstStatsBtn.Font = Enum.Font.GothamBold
+rstStatsBtn.TextSize = 10.5
+rstStatsBtn.BorderSizePixel = 0
+Instance.new("UICorner", rstStatsBtn).CornerRadius = UDim.new(0, 6)
+local rssSt = Instance.new("UIStroke", rstStatsBtn)
+rssSt.Color = Color3.fromRGB(38, 40, 50)
 
-local stY = 10
-local function addSet(lbl, key, def)
-	CFG[key] = def
-	mkToggle(stSF, lbl, stY, def, function(v) CFG[key]=v end)
-	stY = stY + 34
-end
-
-mkLbl(stSF, "Anti-Detection", 12, 10, Color3.fromRGB(76,76,90))
-stY = 32; mkSep(stSF, 30)
-addSet("Timing Randomization", "timeJitter",   true)
-addSet("Click Coord Jitter",   "coordJitter",  true)
-addSet("Path Waypoint Jitter", "pathJitter",   true)
-addSet("Fatigue Break",        "fatigueBreak", true)
-addSet("Anti-AFK Sweep",       "mouseAFK",     true)
-mkSep(stSF, stY); stY=stY+8
-mkLbl(stSF, "Security", stY, 10, Color3.fromRGB(76,76,90))
-stY=stY+20; mkSep(stSF, stY); stY=stY+8
-addSet("Admin / Staff Guard",  "adminGuard",   true)
-addSet("Anti-Fingerprint",     "antiFingerp",  true)
-stSF.CanvasSize = UDim2.new(0,0,0, stY+20)
-
--- ========== CONSOLE PANEL ==========
-local cp = panels["Console"]
-
-mkToggle(cp, "Console Logging", 10, false, function(v)
-	consoleOn = v
+local sessionStartTime = os.clock()
+rstStatsBtn.MouseButton1Click:Connect(function()
+	fishCount = 0
+	sessionStartTime = os.clock()
+	statsRateLbl.Text = "Fish Caught: 0 • Rate: 0.0/hr"
+	_clog("Statistics reset successfully")
 end)
 
-mkSep(cp, 46)
+-- Session Timer Updater
+task.spawn(function()
+	while M.on do
+		task.wait(1)
+		local elapsed = os.clock() - sessionStartTime
+		local h = math.floor(elapsed / 3600)
+		local m = math.floor((elapsed % 3600) / 60)
+		local s = math.floor(elapsed % 60)
+		statsTimeLbl.Text = string.format("Session Elapsed: %02d:%02d:%02d", h, m, s)
+		
+		-- Rate calculator
+		if fishCount > 0 then
+			local hours = math.max(elapsed / 3600, 0.01)
+			local rate = fishCount / hours
+			statsRateLbl.Text = string.format("Fish Caught: %d • Rate: %.1f/hr", fishCount, rate)
+		end
+	end
+end)
 
-local clrBtn = Instance.new("TextButton", cp)
-clrBtn.Size = UDim2.new(0, 74, 0, 22)
-clrBtn.Position = UDim2.new(1, -86, 0, 52)
-clrBtn.BackgroundColor3 = Color3.fromRGB(26,26,33)
-clrBtn.Text = "Clear Log"
-clrBtn.TextColor3 = Color3.fromRGB(150,150,162)
-clrBtn.Font = Enum.Font.GothamMedium
-clrBtn.TextSize = 11
-clrBtn.BorderSizePixel = 0
-Instance.new("UICorner", clrBtn).CornerRadius = UDim.new(0,6)
-local clSt = Instance.new("UIStroke", clrBtn)
-clSt.Color = Color3.fromRGB(42,42,51); clSt.Thickness = 1
+-- =============================================================================
+-- PANEL 2: TELEPORTS PANEL
+-- =============================================================================
+local pTele = panels["Teleports"]
 
-local logSF = Instance.new("ScrollingFrame", cp)
-logSF.Size = UDim2.new(1,-22,1,-86)
-logSF.Position = UDim2.new(0,11,0,82)
+-- Scrolling Frame for Teleports list
+local tSF = Instance.new("ScrollingFrame", pTele)
+tSF.Size = UDim2.new(1, 0, 1, 0)
+tSF.BackgroundTransparency = 1
+tSF.BorderSizePixel = 0
+tSF.CanvasSize = UDim2.new(0, 0, 0, 360)
+tSF.ScrollBarThickness = 3
+tSF.ScrollBarImageColor3 = Color3.fromRGB(38, 40, 50)
+
+-- Header Spot
+createLabel(tSF, "MAP SPOTS (INDO HANGOUT)", UDim2.new(1, -28, 0, 16), UDim2.new(0, 14, 0, 8), Enum.Font.GothamBold, 9.5, Color3.fromRGB(100, 105, 120))
+
+local listY = 28
+
+-- Function to build buttons
+local function makeTeleportButton(name, pos, y)
+	local row = Instance.new("Frame", tSF)
+	row.Size = UDim2.new(1, -28, 0, 32)
+	row.Position = UDim2.new(0, 14, 0, y)
+	row.BackgroundColor3 = Color3.fromRGB(16, 18, 23)
+	Instance.new("UICorner", row).CornerRadius = UDim.new(0, 6)
+	local stroke = Instance.new("UIStroke", row)
+	stroke.Color = Color3.fromRGB(30, 32, 42)
+	
+	local lbl = createLabel(row, name, UDim2.new(0.65, 0, 1, 0), UDim2.new(0, 10, 0, 0), Enum.Font.GothamMedium, 10, Color3.fromRGB(200, 205, 220))
+	
+	local btn = Instance.new("TextButton", row)
+	btn.Size = UDim2.new(0.3, -6, 1, -8)
+	btn.Position = UDim2.new(0.7, 0, 0.5, -8)
+	btn.BackgroundColor3 = Color3.fromRGB(0, 110, 220)
+	btn.Text = "Teleport"
+	btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+	btn.Font = Enum.Font.GothamBold
+	btn.TextSize = 9
+	btn.BorderSizePixel = 0
+	Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 4)
+	
+	btn.MouseButton1Click:Connect(function()
+		teleportTo(pos)
+		_clog("Teleported to: " .. name)
+	end)
+	
+	return row
+end
+
+-- Draw Presets
+for _, pr in ipairs(PRESETS) do
+	makeTeleportButton(pr.name, pr.pos, listY)
+	listY = listY + 38
+end
+
+-- Custom Spots Header
+createSeparator(tSF, listY + 2)
+listY = listY + 12
+createLabel(tSF, "CUSTOM SPOTS", UDim2.new(1, -28, 0, 16), UDim2.new(0, 14, 0, listY), Enum.Font.GothamBold, 9.5, Color3.fromRGB(100, 105, 120))
+listY = listY + 20
+
+local customSpotsContainer = Instance.new("Frame", tSF)
+customSpotsContainer.Size = UDim2.new(1, 0, 0, 150)
+customSpotsContainer.Position = UDim2.new(0, 0, 0, listY)
+customSpotsContainer.BackgroundTransparency = 1
+
+local function drawCustomSpots()
+	customSpotsContainer:ClearAllChildren()
+	local yOffset = 0
+	for idx = 1, 3 do
+		local val = customSpots[idx]
+		local row = Instance.new("Frame", customSpotsContainer)
+		row.Size = UDim2.new(1, -28, 0, 32)
+		row.Position = UDim2.new(0, 14, 0, yOffset)
+		row.BackgroundColor3 = Color3.fromRGB(16, 18, 23)
+		Instance.new("UICorner", row).CornerRadius = UDim.new(0, 6)
+		local stroke = Instance.new("UIStroke", row)
+		stroke.Color = Color3.fromRGB(30, 32, 42)
+		
+		local sName = "Custom Spot #" .. idx
+		local sLabelStr = val and string.format("Spot %d (%.0f, %.0f, %.0f)", idx, val.x, val.y, val.z) or ("Spot " .. idx .. " (Unregistered)")
+		createLabel(row, sLabelStr, UDim2.new(0.5, 0, 1, 0), UDim2.new(0, 10, 0, 0), Enum.Font.GothamMedium, 9.5, val and Color3.fromRGB(0, 200, 255) or Color3.fromRGB(120, 125, 140))
+		
+		local saveBtn = Instance.new("TextButton", row)
+		saveBtn.Size = UDim2.new(0.22, 0, 1, -8)
+		saveBtn.Position = UDim2.new(0.52, 0, 0.5, -8)
+		saveBtn.BackgroundColor3 = Color3.fromRGB(24, 26, 33)
+		saveBtn.Text = "Register"
+		saveBtn.TextColor3 = Color3.fromRGB(200, 205, 220)
+		saveBtn.Font = Enum.Font.GothamMedium
+		saveBtn.TextSize = 8.5
+		saveBtn.BorderSizePixel = 0
+		Instance.new("UICorner", saveBtn).CornerRadius = UDim.new(0, 4)
+		local sS = Instance.new("UIStroke", saveBtn)
+		sS.Color = Color3.fromRGB(44, 46, 55)
+		
+		saveBtn.MouseButton1Click:Connect(function()
+			local char = me.Character
+			local root = char and char:FindFirstChild("HumanoidRootPart")
+			if root then
+				local p = root.Position
+				customSpots[idx] = {x = p.X, y = p.Y, z = p.Z}
+				saveConfig()
+				drawCustomSpots()
+				_clog("Saved Custom Spot " .. idx)
+			end
+		end)
+		
+		local tpBtn = Instance.new("TextButton", row)
+		tpBtn.Size = UDim2.new(0.22, 0, 1, -8)
+		tpBtn.Position = UDim2.new(0.76, 0, 0.5, -8)
+		tpBtn.BackgroundColor3 = val and Color3.fromRGB(0, 110, 220) or Color3.fromRGB(34, 36, 45)
+		tpBtn.Text = "Go"
+		tpBtn.TextColor3 = val and Color3.fromRGB(255, 255, 255) or Color3.fromRGB(80, 85, 95)
+		tpBtn.Font = Enum.Font.GothamBold
+		tpBtn.TextSize = 8.5
+		tpBtn.BorderSizePixel = 0
+		tpBtn.Active = (val ~= nil)
+		Instance.new("UICorner", tpBtn).CornerRadius = UDim.new(0, 4)
+		
+		if val then
+			tpBtn.MouseButton1Click:Connect(function()
+				teleportTo(Vector3.new(val.x, val.y, val.z))
+				_clog("Teleported to custom Spot " .. idx)
+			end)
+		end
+		
+		yOffset = yOffset + 38
+	end
+	tSF.CanvasSize = UDim2.new(0, 0, 0, listY + yOffset + 20)
+end
+
+drawCustomSpots()
+
+-- Dynamic Water Scanner Option
+local scanCard = Instance.new("Frame", tSF)
+scanCard.Size = UDim2.new(1, -28, 0, 48)
+scanCard.Position = UDim2.new(0, 14, 0, listY + 118)
+scanCard.BackgroundColor3 = Color3.fromRGB(10, 30, 25)
+Instance.new("UICorner", scanCard).CornerRadius = UDim.new(0, 6)
+local scSt = Instance.new("UIStroke", scanCard)
+scSt.Color = Color3.fromRGB(0, 170, 100)
+
+createLabel(scanCard, "Water Proximity Teleporter", UDim2.new(0.65, 0, 0.5, 0), UDim2.new(0, 10, 0, 4), Enum.Font.GothamBold, 9.5, Color3.fromRGB(200, 255, 220))
+createLabel(scanCard, "Scans the map for active water parts", UDim2.new(0.65, 0, 0.5, 0), UDim2.new(0, 10, 0.5, -2), Enum.Font.Gotham, 8.5, Color3.fromRGB(150, 200, 180))
+
+local scanBtn = Instance.new("TextButton", scanCard)
+scanBtn.Size = UDim2.new(0.3, -8, 1, -12)
+scanBtn.Position = UDim2.new(0.7, 0, 0.5, -18)
+scanBtn.BackgroundColor3 = Color3.fromRGB(0, 150, 80)
+scanBtn.Text = "Scan & Go"
+scanBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+scanBtn.Font = Enum.Font.GothamBold
+scanBtn.TextSize = 9
+scanBtn.BorderSizePixel = 0
+Instance.new("UICorner", scanBtn).CornerRadius = UDim.new(0, 4)
+
+scanBtn.MouseButton1Click:Connect(function()
+	local waterList = {}
+	for _, v in ipairs(workspace:GetDescendants()) do
+		if v:IsA("BasePart") then
+			local name = v.Name:lower()
+			if name:find("water") or name:find("ocean") or name:find("sea") or name:find("danau") or name:find("laut") or name:find("river") then
+				table.insert(waterList, v)
+			end
+		end
+	end
+	
+	if #waterList > 0 then
+		-- Choose the largest water part or first one
+		table.sort(waterList, function(a, b) return a.Size.Magnitude > b.Size.Magnitude end)
+		local wt = waterList[1]
+		local targetPos = wt.Position + Vector3.new(0, wt.Size.Y/2 + 3, 0)
+		teleportTo(targetPos)
+		_clog("Found & teleported to water: " .. wt.Name)
+	else
+		_clog("Failed: No water parts found in map")
+	end
+end)
+
+-- =============================================================================
+-- PANEL 3: SETTINGS PANEL
+-- =============================================================================
+local pSett = panels["Settings"]
+
+local sY = 10
+local function addSettToggle(lbl, key, def)
+	createToggle(pSett, lbl, sY, def, function(val)
+		CFG[key] = val
+		saveConfig()
+		_clog(lbl .. " set to " .. tostring(val))
+	end)
+	sY = sY + 36
+end
+
+addSettToggle("Click Timing Randomization", "timeJitter", CFG.timeJitter)
+addSettToggle("Cursor Position Jitter", "coordJitter", CFG.coordJitter)
+addSettToggle("AFK Break Simulation", "fatigueBreak", CFG.fatigueBreak)
+addSettToggle("Anti-AFK Mouse Sweep", "mouseAFK", CFG.mouseAFK)
+addSettToggle("Admin & Staff Auto-Kick", "adminGuard", CFG.adminGuard)
+
+createSeparator(pSett, sY + 4)
+sY = sY + 12
+
+createToggle(pSett, "Watchdog Auto-Reset System", sY, autoResetEnabled, function(val)
+	autoResetEnabled = val
+	saveConfig()
+	_clog("Watchdog set to " .. tostring(val))
+end)
+
+-- =============================================================================
+-- PANEL 4: WEBHOOK & LOGS
+-- =============================================================================
+local pWeb = panels["Webhook"]
+
+-- Webhook Input Fields
+local whCard, whStroke = createCard(pWeb, UDim2.new(1, -28, 0, 78), UDim2.new(0, 14, 0, 10))
+whStroke.Color = Color3.fromRGB(24, 26, 33)
+
+createLabel(whCard, "Discord Webhook Integration", UDim2.new(1, -20, 0, 16), UDim2.new(0, 10, 0, 4), Enum.Font.GothamBold, 9.5, Color3.fromRGB(100, 105, 120))
+
+local whBox = Instance.new("TextBox", whCard)
+whBox.Size = UDim2.new(1, -20, 0, 24)
+whBox.Position = UDim2.new(0, 10, 0, 22)
+whBox.BackgroundColor3 = Color3.fromRGB(12, 13, 17)
+whBox.TextColor3 = Color3.fromRGB(220, 225, 240)
+whBox.PlaceholderText = "Paste Discord webhook link here..."
+whBox.PlaceholderColor3 = Color3.fromRGB(70, 75, 90)
+whBox.Text = webhookUrl
+whBox.ClearTextOnFocus = false
+whBox.Font = Enum.Font.Code
+whBox.TextSize = 9.5
+whBox.TextXAlignment = Enum.TextXAlignment.Left
+whBox.BorderSizePixel = 0
+Instance.new("UICorner", whBox).CornerRadius = UDim.new(0, 4)
+local whbStr = Instance.new("UIStroke", whBox)
+whbStr.Color = Color3.fromRGB(36, 38, 48)
+
+whBox.FocusLost:Connect(function()
+	webhookUrl = whBox.Text
+	saveConfig()
+	_clog("Webhook URL updated")
+end)
+
+local whEnableBtn = Instance.new("TextButton", whCard)
+whEnableBtn.Size = UDim2.new(0.5, -15, 0, 22)
+whEnableBtn.Position = UDim2.new(0, 10, 0, 50)
+whEnableBtn.BackgroundColor3 = webhookEnabled and Color3.fromRGB(0, 140, 80) or Color3.fromRGB(34, 36, 45)
+whEnableBtn.Text = webhookEnabled and "Webhook: ENABLED" or "Webhook: DISABLED"
+whEnableBtn.TextColor3 = Color3.fromRGB(240, 242, 248)
+whEnableBtn.Font = Enum.Font.GothamBold
+whEnableBtn.TextSize = 9.5
+whEnableBtn.BorderSizePixel = 0
+Instance.new("UICorner", whEnableBtn).CornerRadius = UDim.new(0, 4)
+
+whEnableBtn.MouseButton1Click:Connect(function()
+	webhookEnabled = not webhookEnabled
+	whEnableBtn.BackgroundColor3 = webhookEnabled and Color3.fromRGB(0, 140, 80) or Color3.fromRGB(34, 36, 45)
+	whEnableBtn.Text = webhookEnabled and "Webhook: ENABLED" or "Webhook: DISABLED"
+	saveConfig()
+	_clog("Webhook status: " .. tostring(webhookEnabled))
+end)
+
+local whTestBtn = Instance.new("TextButton", whCard)
+whTestBtn.Size = UDim2.new(0.5, -15, 0, 22)
+whTestBtn.Position = UDim2.new(0.5, 5, 0, 50)
+whTestBtn.BackgroundColor3 = Color3.fromRGB(24, 26, 33)
+whTestBtn.Text = "Send Test Ping"
+whTestBtn.TextColor3 = Color3.fromRGB(150, 155, 170)
+whTestBtn.Font = Enum.Font.GothamBold
+whTestBtn.TextSize = 9.5
+whTestBtn.BorderSizePixel = 0
+Instance.new("UICorner", whTestBtn).CornerRadius = UDim.new(0, 4)
+local whtStr = Instance.new("UIStroke", whTestBtn)
+whtStr.Color = Color3.fromRGB(44, 46, 55)
+
+whTestBtn.MouseButton1Click:Connect(function()
+	if webhookUrl == "" then
+		_clog("Error: Webhook link is empty!")
+		return
+	end
+	_clog("Sending test webhook notification...")
+	sendDiscordWebhook("🧪 Webhook Verification Ping", "Successfully connected from Roblox client. System telemetry is active and running.", "#00cc66")
+end)
+
+-- Logging Console
+local consoleCard, cnStroke = createCard(pWeb, UDim2.new(1, -28, 0, 220), UDim2.new(0, 14, 0, 94))
+cnStroke.Color = Color3.fromRGB(24, 26, 33)
+
+local cHeader = createLabel(consoleCard, "Realtime System Logs", UDim2.new(0.5, 0, 0, 18), UDim2.new(0, 10, 0, 4), Enum.Font.GothamBold, 9.5, Color3.fromRGB(100, 105, 120))
+
+local logToggle = Instance.new("TextButton", consoleCard)
+logToggle.Size = UDim2.new(0, 60, 0, 16)
+logToggle.Position = UDim2.new(1, -126, 0, 4)
+logToggle.BackgroundColor3 = Color3.fromRGB(34, 36, 45)
+logToggle.Text = "Log: OFF"
+logToggle.TextColor3 = Color3.fromRGB(150, 155, 170)
+logToggle.Font = Enum.Font.GothamBold
+logToggle.TextSize = 8.5
+logToggle.BorderSizePixel = 0
+Instance.new("UICorner", logToggle).CornerRadius = UDim.new(0, 4)
+
+local logClear = Instance.new("TextButton", consoleCard)
+logClear.Size = UDim2.new(0, 50, 0, 16)
+logClear.Position = UDim2.new(1, -60, 0, 4)
+logClear.BackgroundColor3 = Color3.fromRGB(34, 36, 45)
+logClear.Text = "Clear"
+logClear.TextColor3 = Color3.fromRGB(150, 155, 170)
+logClear.Font = Enum.Font.GothamBold
+logClear.TextSize = 8.5
+logClear.BorderSizePixel = 0
+Instance.new("UICorner", logClear).CornerRadius = UDim.new(0, 4)
+
+local logSF = Instance.new("ScrollingFrame", consoleCard)
+logSF.Size = UDim2.new(1, -12, 1, -28)
+logSF.Position = UDim2.new(0, 6, 0, 24)
 logSF.BackgroundTransparency = 1
-logSF.CanvasSize = UDim2.new(0,0,0,0)
+logSF.CanvasSize = UDim2.new(0, 0, 0, 0)
 logSF.ScrollBarThickness = 2
-logSF.ScrollBarImageColor3 = Color3.fromRGB(50,50,60)
+logSF.ScrollBarImageColor3 = Color3.fromRGB(36, 38, 48)
+logSF.BorderSizePixel = 0
 
 local logLL = Instance.new("UIListLayout", logSF)
 logLL.SortOrder = Enum.SortOrder.LayoutOrder
-logLL.Padding = UDim.new(0,3)
-local logOrd = 0
+logLL.Padding = UDim.new(0, 3)
+
+local logCount = 0
 
 local function appendLog(txt)
 	if not consoleOn then return end
-	logOrd = logOrd + 1
+	logCount = logCount + 1
+	
 	local l = Instance.new("TextLabel", logSF)
-	l.LayoutOrder = logOrd
-	l.Size = UDim2.new(1,0,0,14)
+	l.LayoutOrder = logCount
+	l.Size = UDim2.new(1, 0, 0, 14)
 	l.BackgroundTransparency = 1
-	l.Text = "["..os.date("%H:%M:%S").."] "..tostring(txt)
-	l.TextColor3 = Color3.fromRGB(150,150,162)
+	l.Text = string.format("[%s] %s", os.date("%H:%M:%S"), tostring(txt))
+	l.TextColor3 = Color3.fromRGB(160, 165, 180)
 	l.Font = Enum.Font.Code
-	l.TextSize = 10
+	l.TextSize = 9
 	l.TextXAlignment = Enum.TextXAlignment.Left
 	l.TextWrapped = true
+	
 	task.defer(function()
-		logSF.CanvasSize = UDim2.new(0,0,0,logLL.AbsoluteContentSize.Y+6)
-		logSF.CanvasPosition = Vector2.new(0,math.huge)
+		logSF.CanvasSize = UDim2.new(0, 0, 0, logLL.AbsoluteContentSize.Y + 4)
+		logSF.CanvasPosition = Vector2.new(0, math.huge)
 	end)
-	local kids = {}
-	for _, c in ipairs(logSF:GetChildren()) do if c:IsA("TextLabel") then kids[#kids+1]=c end end
-	if #kids > 80 then kids[1]:Destroy() end
+	
+	local items = {}
+	for _, child in ipairs(logSF:GetChildren()) do
+		if child:IsA("TextLabel") then table.insert(items, child) end
+	end
+	if #items > 50 then
+		items[1]:Destroy()
+	end
 end
 _clog = appendLog
 
-clrBtn.MouseButton1Click:Connect(function()
-	for _, c in ipairs(logSF:GetChildren()) do if c:IsA("TextLabel") then c:Destroy() end end
-	logSF.CanvasSize = UDim2.new(0,0,0,0); logOrd=0
+logToggle.MouseButton1Click:Connect(function()
+	consoleOn = not consoleOn
+	logToggle.Text = consoleOn and "Log: ON" or "Log: OFF"
+	logToggle.BackgroundColor3 = consoleOn and Color3.fromRGB(0, 140, 80) or Color3.fromRGB(34, 36, 45)
+	logToggle.TextColor3 = consoleOn and Color3.fromRGB(240, 242, 248) or Color3.fromRGB(150, 155, 170)
 end)
 
--- ========== HELPERS ==========
-local function trulyVis(obj)
-	if not obj or typeof(obj)~="Instance" or not obj:IsA("GuiObject") then return false end
+logClear.MouseButton1Click:Connect(function()
+	for _, child in ipairs(logSF:GetChildren()) do
+		if child:IsA("TextLabel") then child:Destroy() end
+	end
+	logSF.CanvasSize = UDim2.new(0, 0, 0, 0)
+	logCount = 0
+end)
+
+-- =============================================================================
+-- FISHING ENGINE
+-- =============================================================================
+local function trulyVisible(obj)
+	if not obj or typeof(obj) ~= "Instance" or not obj:IsA("GuiObject") then return false end
 	if not obj.Visible then return false end
 	local ok, sz = pcall(function() return obj.AbsoluteSize end)
-	if not ok or sz.X<=0 or sz.Y<=0 then return false end
+	if not ok or sz.X <= 0 or sz.Y <= 0 then return false end
 	local cur = obj.Parent
-	while cur and cur~=game do
-		if cur:IsA("ScreenGui") then if not cur.Enabled then return false end; break
-		elseif cur:IsA("GuiObject") then if not cur.Visible then return false end end
+	while cur and cur ~= game do
+		if cur:IsA("ScreenGui") then
+			if not cur.Enabled then return false end
+			break
+		elseif cur:IsA("GuiObject") then
+			if not cur.Visible then return false end
+		end
 		cur = cur.Parent
 	end
 	return true
 end
 
-local function findTool(lst)
-	local ch = me.Character; local bp = me.Backpack
+local function getEquippedRod()
+	local ch = me.Character
 	if ch then
-		for _,n in ipairs(lst) do local t=ch:FindFirstChild(n); if t and t:IsA("Tool") then return t,"char" end end
-	end
-	for _,n in ipairs(lst) do local t=bp:FindFirstChild(n); if t then return t,"bp" end end
-	if ch then local t=ch:FindFirstChildWhichIsA("Tool"); if t then return t,"char" end end
-	return bp:FindFirstChildWhichIsA("Tool"),"bp"
-end
-
-local function equipTool(lst)
-	local ch = me.Character; if not ch then return nil end
-	local hum = ch:FindFirstChildOfClass("Humanoid"); if not hum then return nil end
-	local eq = ch:FindFirstChildWhichIsA("Tool")
-	for _,n in ipairs(lst) do if eq and eq.Name:lower():find(n:lower()) then return eq end end
-	local t, loc = findTool(lst)
-	if t and loc=="bp" then
-		pcall(function() hum:EquipTool(t) end)
-		task.wait(0.55)
-		return ch:FindFirstChildWhichIsA("Tool")
-	end
-	return eq
-end
-
-local function jT(base, p) if not CFG.timeJitter then return base end; return base*(1+(math.random()*2-1)*(p or 0.12)) end
-local function jV(v) if not CFG.coordJitter then return v end; return Vector2.new(v.X+math.random(-12,12), v.Y+math.random(-10,10)) end
-
--- ========== ANTI-AFK ==========
-task.spawn(function()
-	while M.on do
-		task.wait(math.random(90,150))
-		if not M.on then break end
-		if CFG.mouseAFK then
-			pcall(function()
-				local cam = workspace.CurrentCamera; if not cam then return end
-				local sz = cam.ViewportSize
-				VU:MouseMoveEvent(Vector2.new(sz.X/2+math.random(-70,70), sz.Y/2+math.random(-50,50)), cam.CFrame)
-			end)
+		local eq = ch:FindFirstChildWhichIsA("Tool")
+		if eq then
+			for _, n in ipairs(FISH_TOOLS) do
+				if eq.Name:lower():find(n:lower()) then return eq end
+			end
+		end
+		
+		-- Try to find in backpack and equip
+		local bp = me.Backpack
+		for _, n in ipairs(FISH_TOOLS) do
+			local t = bp:FindFirstChild(n) or bp:FindFirstChildWhichIsA("Tool")
+			if t then
+				local hum = ch:FindFirstChildOfClass("Humanoid")
+				if hum then
+					pcall(function() hum:EquipTool(t) end)
+					task.wait(0.5)
+					return ch:FindFirstChildWhichIsA("Tool")
+				end
+			end
 		end
 	end
-end)
-
-local afkC = me.Idled:Connect(function()
-	pcall(function()
-		local cam = workspace.CurrentCamera
-		VU:Button2Down(Vector2.new(0,0), cam.CFrame)
-		task.wait(0.12)
-		VU:Button2Up(Vector2.new(0,0), cam.CFrame)
-	end)
-end)
-table.insert(M.c, afkC)
-
-local function checkFatigue(statLbl)
-	if not CFG.fatigueBreak then return end
-	fatCount = fatCount+1
-	if fatCount < fatNext then return end
-	local sec = math.random(5,11)
-	local prev = statLbl.Text
-	statLbl.Text = "Status: Resting"
-	pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.Space, false, game) end)
-	pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game) end)
-	isSpace = false
-	task.wait(sec)
-	fatCount=0; fatNext=math.random(14,24)
-	statLbl.Text = prev
+	return nil
 end
 
--- ========== ADMIN DETECTION ==========
-local STAFF_GRP = 1200769
-local ADM_PATS  = {"moderator","roblox_adm","rbxadmin","staffmod","gamemaster","game_master"}
-
-local function checkAdmin(p)
-	if p==me or not p.Parent or not CFG.adminGuard then return end
-	task.wait(2.5)
-	if not p or not p.Parent then return end
-	local isA = false
-	pcall(function() isA = isA or p:IsInGroup(STAFF_GRP) end)
-	if not isA then
-		local ln = (p.Name..p.DisplayName):lower()
-		for _,pat in ipairs(ADM_PATS) do if ln:find(pat) then isA=true; break end end
-	end
-	if not isA then
-		pcall(function()
-			if game.CreatorType==Enum.CreatorType.Group then
-				if p:GetRankInGroup(game.CreatorId)>=200 then isA=true end
-			end
-		end)
-	end
-	if isA then
-		mode="OFF"; isSpace=false
-		pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.Space, false, game) end)
-		pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game) end)
-		task.wait(0.8); me:Kick("Disconnected.")
-	end
-end
-
-for _,p in ipairs(Players:GetPlayers()) do task.spawn(checkAdmin,p) end
-local admC = Players.PlayerAdded:Connect(function(p) task.spawn(checkAdmin,p) end)
-table.insert(M.c, admC)
-
--- ========== FISHING ENGINE ==========
-local function doResetFish()
-	fishState="IDLE"; isSpace=false; isCasting=false; successDone=false
-	mgEverSeen=false; mgStarted=false; wBar=nil; rBar=nil
-	lastScan=0; lastWC=nil; wVel=0; mgLastSeen=0
-	castSess=castSess+1; idleAt=os.clock()
-	pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.Space, false, game) end)
-	setPhase(0)
-	fStatL.Text="Status: Idle"
-end
-
-rstBtn.MouseButton1Click:Connect(function()
-	doResetFish()
-	lg("[FISH] Manual reset")
-end)
-
-local function setSpace(v, force)
-	if isSpace==v and not force then return end
+local function toggleSpace(v, force)
+	if isSpace == v and not force then return end
 	local now = os.clock()
-	if not force and (now-lastSpTgl)<0.03 then return end
+	if not force and (now - lastSpTgl) < 0.03 then return end
 	pcall(function() VIM:SendKeyEvent(v, Enum.KeyCode.Space, false, game) end)
-	isSpace=v; lastSpTgl=now
+	isSpace = v
+	lastSpTgl = now
 end
 
 local function getBars()
-	if wBar and rBar and wBar.Parent and rBar.Parent and trulyVis(wBar) and trulyVis(rBar) then
+	if wBar and rBar and wBar.Parent and rBar.Parent and trulyVisible(wBar) and trulyVisible(rBar) then
 		return wBar, rBar
 	end
 	local now = os.clock()
-	if now-lastScan < 0.04 then return nil,nil end
-	lastScan=now; wBar=nil; rBar=nil
-	local pg = me:FindFirstChild("PlayerGui"); if not pg then return nil,nil end
-	for _,v in pairs(pg:GetDescendants()) do
-		if v:IsA("GuiObject") and trulyVis(v) then
-			local ln = v.Name:lower()
-			local par = v.Parent
-			if par and par:IsA("GuiObject") then
-				local isW = ln=="whitebar" or ln=="playerbar" or (ln:find("white") and ln:find("bar"))
-				if isW then
-					local red
-					for _,sib in ipairs(par:GetChildren()) do
-						if sib~=v and sib:IsA("GuiObject") and trulyVis(sib) then
-							local sn=sib.Name:lower()
-							if sn:find("red") or sn:find("target") or sn:find("goal") then red=sib; break end
+	if now - lastScan < 0.08 then return nil, nil end
+	lastScan = now
+	
+	wBar = nil
+	rBar = nil
+	local pg = me:FindFirstChild("PlayerGui")
+	if not pg then return nil, nil end
+	
+	-- Optimized 1-pass Scan based on color match
+	for _, v in ipairs(pg:GetDescendants()) do
+		if v:IsA("GuiObject") and trulyVisible(v) and v.AbsoluteSize.X > 10 then
+			local name = v.Name:lower()
+			if name == "whitebar" or name == "playerbar" or (name:find("white") and name:find("bar")) then
+				local parent = v.Parent
+				if parent and parent:IsA("GuiObject") then
+					for _, sib in ipairs(parent:GetChildren()) do
+						if sib ~= v and sib:IsA("GuiObject") and trulyVisible(sib) then
+							local sn = sib.Name:lower()
+							if sn:find("red") or sn:find("target") or sn:find("goal") then
+								wBar = v
+								rBar = sib
+								return v, sib
+							end
 						end
 					end
-					if red and trulyVis(red) and v.AbsoluteSize.X>10 then
-						wBar=v; rBar=red; return v,red
+				end
+			end
+		end
+	end
+	
+	-- Fallback scan based on background color
+	for _, v in ipairs(pg:GetDescendants()) do
+		if v:IsA("GuiObject") and trulyVisible(v) and v.AbsoluteSize.X > 12 and v.AbsoluteSize.Y > 5 then
+			local c = v.BackgroundColor3
+			local parent = v.Parent
+			if c.R > 0.8 and c.G > 0.8 and c.B > 0.8 and parent and parent:IsA("GuiObject") then
+				for _, sib in ipairs(parent:GetChildren()) do
+					if sib ~= v and sib:IsA("GuiObject") and trulyVisible(sib) and sib.AbsoluteSize.X > 12 then
+						local sc = sib.BackgroundColor3
+						if sc.R > 0.45 and sc.G < 0.25 and sc.B < 0.25 then
+							wBar = v
+							rBar = sib
+							return v, sib
+						end
 					end
 				end
 			end
 		end
 	end
-	for _,v in pairs(pg:GetDescendants()) do
-		if v:IsA("GuiObject") and trulyVis(v) and v.AbsoluteSize.X>12 and v.AbsoluteSize.Y>5 then
-			local c=v.BackgroundColor3; local par=v.Parent
-			if c.R>0.78 and c.G>0.78 and c.B>0.78 and par and par:IsA("GuiObject") then
-				for _,sib in ipairs(par:GetChildren()) do
-					if sib~=v and sib:IsA("GuiObject") and trulyVis(sib) and sib.AbsoluteSize.X>12 then
-						local sc=sib.BackgroundColor3
-						if sc.R>0.46 and sc.G<0.22 and sc.B<0.22 then wBar=v; rBar=sib; return v,sib end
-					end
-				end
-			end
-		end
-	end
-	return nil,nil
+	
+	return nil, nil
 end
 
-local function doSuccess(why)
+local function handleFatigue()
+	if not CFG.fatigueBreak then return end
+	fatCount = fatCount + 1
+	if fatCount < fatNext then return end
+	
+	local duration = math.random(6, 12)
+	_clog(string.format("AFK Simulator: Resting for %d seconds...", duration))
+	updateStatusUI("Resting...", true)
+	
+	toggleSpace(false, true)
+	task.wait(duration)
+	
+	fatCount = 0
+	fatNext = math.random(15, 25)
+	updateStatusUI("Active", true)
+end
+
+local function handleSuccess(reason)
 	if successDone then return end
-	successDone=true; setSpace(false,true)
-	fishState="DONE"; setPhase(4)
-	fishCount=fishCount+1
-	fCntL.Text="Fish Caught: "..fishCount
-	fStatL.Text="Status: Caught"
-	lg("[FISH] Caught #"..fishCount.." ("..why..")")
-	checkFatigue(fStatL)
-	local sess=castSess
-	task.delay(jT(RECAST_DLY,0.15), function()
-		if not M.on or mode~="FISH" or castSess~=sess then return end
+	successDone = true
+	toggleSpace(false, true)
+	fishState = "DONE"
+	setPhaseIndicator(4)
+	
+	fishCount = fishCount + 1
+	updateStatusUI(string.format("Caught #%d", fishCount), true)
+	_clog("Caught Fish #" .. fishCount .. " [" .. reason .. "]")
+	
+	-- Webhook Notification Dispatch
+	sendDiscordWebhook("🎣 Fish Caught", string.format("Successfully caught fish **#%d** on current session.", fishCount), "#00aaff")
+	
+	handleFatigue()
+	
+	local currentSession = castSess
+	task.delay(RECAST_DLY + (CFG.timeJitter and math.random() * 0.2 or 0), function()
+		if not M.on or mode ~= "FISH" or castSess ~= currentSession then return end
 		doResetFish()
-		task.wait(0.06)
-		if mode=="FISH" then fishState="IDLE"; idleAt=os.clock() end
+		task.wait(0.05)
+		if mode == "FISH" then
+			fishState = "IDLE"
+			idleAt = os.clock()
+		end
 	end)
 end
 
-local hbLast = 0
-local hbC = RS.Heartbeat:Connect(function()
-	if not M.on then return end
-	if mode~="FISH" then if isSpace then setSpace(false,true) end; return end
+doResetFish = function()
+	fishState = "IDLE"
+	isSpace = false
+	isCasting = false
+	successDone = false
+	mgEverSeen = false
+	mgStarted = false
+	wBar = nil
+	rBar = nil
+	lastScan = 0
+	lastWC = nil
+	wVel = 0
+	mgLastSeen = 0
+	castSess = castSess + 1
+	idleAt = os.clock()
+	toggleSpace(false, true)
+	setPhaseIndicator(0)
+	updateStatusUI("Active", true)
+end
+
+-- Minigame controller (RunService Heartbeat for precision tracking)
+local hbConnection
+hbConnection = RS.Heartbeat:Connect(function()
+	if not M.on then
+		if hbConnection then pcall(function() hbConnection:Disconnect() end) end
+		return
+	end
+	if mode ~= "FISH" then
+		if isSpace then toggleSpace(false, true) end
+		return
+	end
+	
 	local now = os.clock()
-	if now-hbLast < 0.016 then return end
-	hbLast = now
 	safe(function()
 		local rod = RODS[rodIdx]
-		if fishState=="WAITING" then
-			local el = now-biteStart
-			setPBar(math.clamp(el/BITE_WAIT,0,1))
-			fStatL.Text=string.format("Status: Waiting (%.0fs)", math.max(0,BITE_WAIT-el))
-			if el>=BITE_WAIT then
-				fishState="MINIGAME"; mgStart=now
-				mgEverSeen=false; mgStarted=false; mgLastSeen=0; successDone=false
-				wBar=nil; rBar=nil; lastScan=0; lastWC=nil; wVel=0; lastWTime=now
-				setSpace(false,true); setPhase(3); setPBar(0)
-				fStatL.Text="Status: Minigame"
+		if fishState == "WAITING" then
+			local elapsed = now - biteStart
+			setPbarPercent(math.clamp(elapsed / BITE_WAIT, 0, 1))
+			if elapsed >= BITE_WAIT then
+				fishState = "MINIGAME"
+				mgStart = now
+				mgEverSeen = false
+				mgStarted = false
+				mgLastSeen = 0
+				successDone = false
+				wBar = nil
+				rBar = nil
+				lastScan = 0
+				lastWC = nil
+				wVel = 0
+				lastWTime = now
+				toggleSpace(false, true)
+				setPhaseIndicator(3)
+				setPbarPercent(0)
+				_clog("Minigame detected! Active solver initiated")
 			end
 			return
 		end
-		if fishState~="MINIGAME" then return end
-		local el = now-mgStart
-		local timeout = 11+rod.prog*3.2
-		setPBar(math.clamp(el/timeout,0,1))
-		if el>=timeout then setSpace(false,true); doSuccess("timeout"); return end
-		local wb,rb = getBars()
-		if wb and rb and trulyVis(wb) and trulyVis(rb) then
-			mgEverSeen=true; mgLastSeen=now
+		
+		if fishState ~= "MINIGAME" then return end
+		
+		local elapsed = now - mgStart
+		local timeout = 12.0 + rod.prog * 3.5
+		setPbarPercent(math.clamp(elapsed / timeout, 0, 1))
+		
+		if elapsed >= timeout then
+			toggleSpace(false, true)
+			handleSuccess("Timeout Fallback")
+			return
+		end
+		
+		local wb, rb = getBars()
+		if wb and rb and trulyVisible(wb) and trulyVisible(rb) then
+			mgEverSeen = true
+			mgLastSeen = now
+			
 			if not mgStarted then
-				mgStarted=true; setSpace(false,true); lastWC=nil; wVel=0; lastWTime=now
+				mgStarted = true
+				toggleSpace(false, true)
+				lastWC = nil
+				wVel = 0
+				lastWTime = now
 			end
-			local wC = wb.AbsolutePosition.X + wb.AbsoluteSize.X*0.5
+			
+			local wC = wb.AbsolutePosition.X + wb.AbsoluteSize.X * 0.5
 			local rL = rb.AbsolutePosition.X
-			local rR = rL+rb.AbsoluteSize.X
-			local rC = (rL+rR)*0.5
-			local rawDt = now-lastWTime
-			local dt = math.clamp(rawDt,0.007,0.13)
+			local rR = rL + rb.AbsoluteSize.X
+			local rC = (rL + rR) * 0.5
+			
+			local rawDt = now - lastWTime
+			local dt = math.clamp(rawDt, 0.007, 0.12)
+			
 			if lastWC then
-				local inst = (wC-lastWC)/dt
-				local sm = math.clamp(0.26/rod.lure,0.1,0.30)
-				wVel = wVel*(1-sm)+inst*sm
+				local inst = (wC - lastWC) / dt
+				local sm = math.clamp(0.25 / rod.lure, 0.08, 0.28)
+				wVel = wVel * (1 - sm) + inst * sm
 			end
-			lastWC=wC; lastWTime=now
-			local ahead = math.clamp(math.abs(wVel)/1650,0.03,0.17)*math.sqrt(rod.lure)
-			local pred  = wC+wVel*ahead
-			local rw    = math.max(rb.AbsoluteSize.X,1)
-			local lag   = math.clamp(rawDt/0.05-1,0,1.2)
-			local tol   = math.clamp(rw*(0.16+lag*0.14+rod.lure*0.025),4,25)
-			local inside = pred>=(rL-tol) and pred<=(rR+tol)
+			
+			lastWC = wC
+			lastWTime = now
+			
+			local ahead = math.clamp(math.abs(wVel) / 1600, 0.03, 0.18) * math.sqrt(rod.lure)
+			local pred = wC + wVel * ahead
+			local rw = math.max(rb.AbsoluteSize.X, 1)
+			local lag = math.clamp(rawDt / 0.05 - 1, 0, 1.2)
+			local tol = math.clamp(rw * (0.16 + lag * 0.14 + rod.lure * 0.02), 4, 25)
+			
+			local inside = pred >= (rL - tol) and pred <= (rR + tol)
 			if inside then
-				if wC<rL then setSpace(true)
-				elseif wC>rR then setSpace(false)
-				else local e=wC-rC; if math.abs(e)>tol*0.4 then setSpace(e<0) end end
+				if wC < rL then toggleSpace(true)
+				elseif wC > rR then toggleSpace(false)
+				else
+					local e = wC - rC
+					if math.abs(e) > tol * 0.4 then toggleSpace(e < 0) end
+				end
 			else
-				local e=rC-pred
-				if e>tol then setSpace(true)
-				elseif e<-tol then setSpace(false)
-				elseif math.abs(wVel)>135 then setSpace(wVel<0) end
+				local e = rC - pred
+				if e > tol then toggleSpace(true)
+				elseif e < -tol then toggleSpace(false)
+				elseif math.abs(wVel) > 130 then toggleSpace(wVel < 0) end
 			end
-			fStatL.Text=string.format("Status: Playing (%.0fs)",el)
 		else
 			if mgEverSeen then
-				if mgLastSeen>0 and (now-mgLastSeen)>=0.20 then setSpace(false,true); doSuccess("bar-gone") end
+				-- If bar vanished for more than 0.18s, minigame has finished
+				if mgLastSeen > 0 and (now - mgLastSeen) >= 0.18 then
+					toggleSpace(false, true)
+					handleSuccess("Bar Cleared")
+				end
 			else
-				local beat = math.floor((now-mgStart)*3.0)%2==0
-				setSpace(beat)
-				fStatL.Text=string.format("Status: Sync (%.0fs)",el)
+				-- Sync mode to trigger bite trigger
+				local beat = math.floor((now - mgStart) * 3.0) % 2 == 0
+				toggleSpace(beat)
 			end
 		end
 	end)
 end)
-table.insert(M.c, hbC)
+table.insert(M.c, hbConnection)
 
--- fishing main loop (cast controller)
+-- Casting loop thread
 task.spawn(function()
 	while M.on do
-		task.wait(0.15)
-		if not M.on or mode~="FISH" then continue end
+		task.wait(0.12)
+		if not M.on or mode ~= "FISH" then continue end
+		
 		safe(function()
-			local ch = me.Character; if not ch then return end
-			local hum = ch:FindFirstChildOfClass("Humanoid"); if not hum then return end
-			if hum:GetStateEnabled(Enum.HumanoidStateType.Jumping) then
-				hum:SetStateEnabled(Enum.HumanoidStateType.Jumping,false)
+			local tool = getEquippedRod()
+			if not tool then
+				updateStatusUI("No Rod Found", true)
+				return
 			end
-			local tool = equipTool(FISH_TOOLS)
-			if not tool then fStatL.Text="Status: No rod"; return end
-			if fishState=="IDLE" and not isCasting then
-				isCasting=true; castSess=castSess+1; local sess=castSess
+			
+			if fishState == "IDLE" and not isCasting then
+				isCasting = true
+				castSess = castSess + 1
+				local sess = castSess
+				
 				task.spawn(function()
-					if not M.on or mode~="FISH" or castSess~=sess then isCasting=false; return end
-					local cam = workspace.CurrentCamera; if not cam then isCasting=false; return end
+					if not M.on or mode ~= "FISH" or castSess ~= sess then isCasting = false; return end
+					
+					local cam = workspace.CurrentCamera
+					if not cam then isCasting = false; return end
+					
 					local rod = RODS[rodIdx]
-					local ctr = jV(cam.ViewportSize/2)
-					fishState="CASTING"; setPhase(1); setPBar(0)
-					fStatL.Text="Status: Casting"
+					local size = cam.ViewportSize
+					local center = Vector2.new(
+						size.X/2 + (CFG.coordJitter and math.random(-40, 40) or 0),
+						size.Y/2 + (CFG.coordJitter and math.random(-30, 30) or 0)
+					)
+					
+					fishState = "CASTING"
+					setPhaseIndicator(1)
+					setPbarPercent(0)
+					
 					pcall(function() tool:Activate() end)
-					pcall(function() VU:Button1Down(ctr, cam.CFrame) end)
-					local dur = jT(CAST_HOLD/math.max(1,math.sqrt(rod.lure)*0.85),0.1)
+					pcall(function() VU:Button1Down(center, cam.CFrame) end)
+					
+					local holdTime = CAST_HOLD / math.max(1, math.sqrt(rod.lure) * 0.85)
+					if CFG.timeJitter then holdTime = holdTime * (1 + (math.random() * 0.16 - 0.08)) end
+					
 					local t0 = os.clock()
-					while os.clock()-t0<dur do
+					while os.clock() - t0 < holdTime do
 						task.wait(0.04)
-						if mode~="FISH" or not M.on or castSess~=sess then
-							pcall(function() VU:Button1Up(ctr,cam.CFrame) end); isCasting=false; return
+						if mode ~= "FISH" or not M.on or castSess ~= sess then
+							pcall(function() VU:Button1Up(center, cam.CFrame) end)
+							isCasting = false
+							return
 						end
-						setPBar((os.clock()-t0)/dur)
+						setPbarPercent((os.clock() - t0) / holdTime)
 					end
-					pcall(function() VU:Button1Up(ctr, cam.CFrame) end)
-					setPBar(1); task.wait(jT(0.14,0.08))
-					if mode~="FISH" or not M.on or castSess~=sess then isCasting=false; return end
-					fishState="WAITING"; biteStart=os.clock()
-					setPhase(2); setPBar(0); fStatL.Text="Status: Waiting"
-					isCasting=false
+					
+					pcall(function() VU:Button1Up(center, cam.CFrame) end)
+					setPbarPercent(1)
+					
+					task.wait(0.12)
+					if mode ~= "FISH" or not M.on or castSess ~= sess then isCasting = false; return end
+					
+					fishState = "WAITING"
+					biteStart = os.clock()
+					setPhaseIndicator(2)
+					setPbarPercent(0)
+					isCasting = false
 				end)
 			end
 		end)
 	end
 end)
 
--- watchdog: auto-reset jika umpan tidak keluar / system macet
+-- Dynamic Watchdog (Stuck Protection)
 task.spawn(function()
 	while M.on do
-		task.wait(4)
-		if not M.on or mode~="FISH" then continue end
+		task.wait(3.0)
+		if not M.on or mode ~= "FISH" or not autoResetEnabled then continue end
+		
 		local now = os.clock()
-		if fishState=="IDLE" and not isCasting and (now-idleAt)>12 then
-			lg("[FISH] Watchdog: idle too long, forcing cast")
+		if fishState == "IDLE" and not isCasting and (now - idleAt) > 10 then
+			_clog("Watchdog: Idle lock detected, cycling recast")
 			doResetFish()
-		elseif fishState=="WAITING" and (now-biteStart)>(BITE_WAIT+8) then
-			lg("[FISH] Watchdog: waiting timeout, reset")
+		elseif fishState == "WAITING" and (now - biteStart) > (BITE_WAIT + 8) then
+			_clog("Watchdog: Bite timeout threshold exceeded, resetting")
+			sendDiscordWebhook("⚠️ Watchdog Warning", "Bite trigger timed out. Auto-resetting bobber...", "#ffaa00")
 			doResetFish()
-		elseif fishState=="CASTING" and not isCasting and (now-idleAt)>10 then
-			lg("[FISH] Watchdog: cast stuck, reset")
+		elseif fishState == "CASTING" and not isCasting and (now - idleAt) > 8 then
+			_clog("Watchdog: Cast sequence locked, restarting hook")
 			doResetFish()
 		end
 	end
 end)
 
--- ========== MINING ENGINE ==========
-local function isBL(name)
-	local ln = name:lower()
-	for _,bl in ipairs(CRYS_NO) do if ln:find(bl,1,true) then return true end end
-	return false
-end
-
-local function scorePart(p)
-	if not (p:IsA("BasePart") or p:IsA("MeshPart")) then return -1 end
-	if isBL(p.Name) then return -999 end
-	local par = p.Parent
-	while par and par~=workspace do if isBL(par.Name) then return -999 end; par=par.Parent end
-	local sc=0; local ln=p.Name:lower()
-	for _,cn in ipairs(CRYS_OK) do if ln:find(cn:lower(),1,true) then sc=sc+5; break end end
-	if p.Material==Enum.Material.Neon then sc=sc+3 end
-	if p:IsA("MeshPart") then sc=sc+1 end
-	if p.Transparency<0.85 then sc=sc+1 end
-	if p.CanCollide then sc=sc+1 end
-	local sz=p.Size
-	if sz.X>22 or sz.Y>22 or sz.Z>22 then sc=sc-6 end
-	if sz.X<0.35 and sz.Y<0.35 and sz.Z<0.35 then sc=sc-5 end
-	local pn=(p.Parent and p.Parent.Name or ""):lower()
-	for _,cn in ipairs(CRYS_OK) do if pn:find(cn:lower(),1,true) then sc=sc+3; break end end
-	return sc
-end
-
--- cache crystal list di background (update setiap 3 detik)
+-- Anti-AFK Simulation
 task.spawn(function()
 	while M.on do
-		task.wait(3)
-		if not M.on or mode~="MINE" then continue end
-		local nc={}
-		for _,obj in pairs(workspace:GetDescendants()) do
-			if scorePart(obj)>=6 then nc[#nc+1]=obj end
+		task.wait(math.random(80, 140))
+		if not M.on then break end
+		if CFG.mouseAFK then
+			pcall(function()
+				local cam = workspace.CurrentCamera
+				if cam then
+					local vSize = cam.ViewportSize
+					VU:MouseMoveEvent(Vector2.new(vSize.X/2 + math.random(-60, 60), vSize.Y/2 + math.random(-40, 40)), cam.CFrame)
+				end
+			end)
 		end
-		crystalCache=nc; cacheAt=os.clock()
 	end
 end)
 
-local function isOccupied(crystal)
-	for _,p in ipairs(Players:GetPlayers()) do
-		if p~=me and p.Character then
-			local root=p.Character.PrimaryPart
-			if root and (root.Position-crystal.Position).Magnitude<10 then
-				local t=p.Character:FindFirstChildOfClass("Tool")
-				if t then
-					local tn=t.Name:lower()
-					for _,mn in ipairs(MINE_TOOLS) do if tn:find(mn:lower(),1,true) then return true end end
-				end
-			end
-		end
-	end
-	return false
-end
-
-local function findBestCrystal()
-	local ch=me.Character; if not ch or not ch.PrimaryPart then return nil end
-	local myP=ch.PrimaryPart.Position
-
-	-- lock: jangan ganti target saat sedang aktif mining
-	if miningLocked and currentTarget and currentTarget.Parent then
-		return currentTarget
-	end
-
-	if currentTarget and currentTarget.Parent and failCount<4
-		and (currentTarget.Position-myP).Magnitude<300 then
-		return currentTarget
-	end
-
-	-- force scan jika cache kosong atau stale
-	if os.clock()-cacheAt>5 or #crystalCache==0 then
-		local nc={}
-		for _,obj in pairs(workspace:GetDescendants()) do
-			if scorePart(obj)>=6 then nc[#nc+1]=obj end
-		end
-		crystalCache=nc; cacheAt=os.clock()
-	end
-
-	-- cari yang TERDEKAT dari posisi saat ini
-	local best,bestD=nil,math.huge
-	for _,obj in ipairs(crystalCache) do
-		if obj.Parent and not isOccupied(obj) then
-			local d=(obj.Position-myP).Magnitude
-			if d<bestD and d<300 then bestD=d; best=obj end
-		end
-	end
-
-	currentTarget=best; failCount=0
-	return best
-end
-
-local function groundRay(pos, ign)
-	local rp=RaycastParams.new()
-	rp.FilterType=Enum.RaycastFilterType.Blacklist
-	rp.FilterDescendantsInstances=ign or {}
-	rp.IgnoreWater=false
-	return workspace:Raycast(pos+Vector3.new(0,16,0), Vector3.new(0,-56,0), rp)
-end
-
-local function getStandPoint(crystal)
-	local ch=me.Character; if not ch or not ch.PrimaryPart then return nil end
-	local origin=crystal.Position
-	local cw=math.max(crystal.Size.X,crystal.Size.Z)
-	local radius=math.clamp(cw*0.28+1.3,STOP_DIST,3.8)
-	local ignore={ch,crystal}
-	local best,bestSc=nil,math.huge
-	for i=1,24 do
-		local a=math.pi*2*(i/24)
-		local smp=origin+Vector3.new(math.cos(a)*radius,0,math.sin(a)*radius)
-		local gr=groundRay(smp,ignore)
-		if gr and gr.Instance and gr.Normal.Y>0.45 then
-			local pos=gr.Position+Vector3.new(0,3.1,0)
-			if pos.Y<=origin.Y+crystal.Size.Y*0.5 then
-				local hd=math.abs(pos.Y-ch.PrimaryPart.Position.Y)
-				if hd<14 then
-					local dc=(Vector3.new(pos.X,origin.Y,pos.Z)-origin).Magnitude
-					local sc=(pos-ch.PrimaryPart.Position).Magnitude+math.abs(dc-radius)*5+hd
-					if sc<bestSc then bestSc=sc; best=pos end
-				end
-			end
-		end
-	end
-	if best then return best end
-	local d=ch.PrimaryPart.Position-origin
-	local flat=Vector3.new(d.X,0,d.Z)
-	if flat.Magnitude<0.4 then flat=Vector3.new(1,0,0) end
-	local fb=origin+flat.Unit*radius
-	local gr=groundRay(fb,ignore)
-	return gr and (gr.Position+Vector3.new(0,3.1,0)) or fb
-end
-
-local function doJump(hum)
-	task.spawn(function()
-		pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
-		task.wait(0.02)
-		pcall(function()
-			VIM:SendKeyEvent(true,  Enum.KeyCode.Space, false, game)
-			task.wait(0.13)
-			VIM:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
-		end)
-	end)
-end
-
-local function moveToPos(hum, targetPos, targetPart)
-	local ch=me.Character; if not ch or not ch.PrimaryPart then return false end
-	pcall(function() VIM:SendKeyEvent(true, Enum.KeyCode.LeftShift, false, game) end)
-	local path=PFS:CreatePath({
-		AgentRadius=1.8, AgentHeight=5.0,
-		AgentCanJump=true, AgentCanClimb=false,
-		WaypointSpacing=CFG.smoothMove and 6 or 3,
-		Costs={Water=8},
-	})
-	local ok=pcall(function() path:ComputeAsync(ch.PrimaryPart.Position, targetPos) end)
-	local wps
-	if ok and path.Status==Enum.PathStatus.Success then wps=path:GetWaypoints()
-	else wps={{Position=targetPos,Action=Enum.PathWaypointAction.Walk}} end
-
-	local origSp=hum.WalkSpeed
-	hum.WalkSpeed=WALK_SPD+(CFG.timeJitter and math.random(-1,2) or 0)
-
-	local lastPos=ch.PrimaryPart.Position
-	local stuckT=0
-	local arrived=false
-
-	-- variasi lompatan: 1-3 titik acak di sepanjang jalur, tidak di awal/akhir
-	local jPts={}
-	if #wps>4 then
-		local n=math.random(1,math.min(3,math.floor(#wps/2)))
-		local used={}
-		for i=1,n do
-			local tries=0
-			repeat
-				local idx=math.random(2,#wps-2)
-				if not used[idx] then used[idx]=true; jPts[idx]=true; break end
-				tries=tries+1
-			until tries>10
-		end
-	end
-
-	for i,wp in ipairs(wps) do
-		if mode~="MINE" or not M.on then break end
-		if targetPart and not targetPart.Parent then break end
-		if wp.Action==Enum.PathWaypointAction.Jump then doJump(hum) end
-
-		if jPts[i] then
-			doJump(hum)
-			-- sedikit belok saat jump agar terlihat natural
-			if math.random()<0.45 then
-				local sideAngle = (math.random()-0.5)*0.8
-				local dir = (targetPos-ch.PrimaryPart.Position)
-				local flat = Vector3.new(dir.X,0,dir.Z)
-				if flat.Magnitude>0.2 then
-					local perp = Vector3.new(-flat.Z,0,flat.X).Unit
-					hum:MoveTo(wp.Position + perp*sideAngle)
-					task.wait(0.06)
-				end
-			end
-		end
-
-		local step=wp.Position
-		if CFG.pathJitter and i<#wps then
-			step=wp.Position+Vector3.new((math.random()-0.5)*0.5,0,(math.random()-0.5)*0.5)
-		end
-
-		hum:MoveTo(step)
-		local t0=os.clock()
-		while mode=="MINE" and M.on and os.clock()-t0<5.5 do
-			task.wait(CFG.smoothMove and 0.06 or 0.12)
-			if not ch.PrimaryPart then break end
-			local cur=ch.PrimaryPart.Position
-			if targetPart and targetPart.Parent then
-				local dc=(cur-targetPart.Position).Magnitude
-				local cw=math.max(targetPart.Size.X,targetPart.Size.Z)
-				if dc<=(cw*0.5+STOP_DIST+0.3) then arrived=true; break end
-			end
-			local reach=(CFG.smoothMove and i<#wps) and 5.0 or 1.2
-			if (cur-wp.Position).Magnitude<=reach then break end
-			if (cur-targetPos).Magnitude<=1.2 then arrived=true; break end
-			if (cur-lastPos).Magnitude<0.17 then
-				stuckT=stuckT+(CFG.smoothMove and 0.06 or 0.12)
-				if stuckT>1.2 then
-					doJump(hum)
-					local dir=targetPos-cur
-					hum:MoveTo(cur+(dir.Magnitude>0.1 and dir.Unit or Vector3.new(1,0,0))*4.5)
-					task.wait(0.3); break
-				end
-			else stuckT=0; lastPos=cur end
-		end
-		if arrived then break end
-	end
-
-	hum.WalkSpeed=origSp
-	pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game) end)
-	if arrived then return true end
-	if not ch.PrimaryPart then return false end
-	return (ch.PrimaryPart.Position-targetPos).Magnitude<=2.2
-end
-
-local function facePart(part)
-	local ch=me.Character; if not ch or not ch.PrimaryPart or not part then return end
-	local p=ch.PrimaryPart.Position
+local idledConnection
+idledConnection = me.Idled:Connect(function()
 	pcall(function()
-		ch:SetPrimaryPartCFrame(CFrame.lookAt(p, Vector3.new(part.Position.X,p.Y,part.Position.Z)))
+		local cam = workspace.CurrentCamera
+		if cam then
+			VU:Button2Down(Vector2.new(0, 0), cam.CFrame)
+			task.wait(0.1)
+			VU:Button2Up(Vector2.new(0, 0), cam.CFrame)
+		end
 	end)
-end
+end)
+table.insert(M.c, idledConnection)
 
-function mineRoutine()
-	mineActive=true
-	while mode=="MINE" and M.on do
-		safe(function()
-			local ch=me.Character; if not ch or not ch.PrimaryPart then task.wait(0.5); return end
-			local hum=ch:FindFirstChildOfClass("Humanoid"); if not hum then task.wait(0.5); return end
+-- =============================================================================
+-- SECURITY COMPONENT: ADMIN DETECTION
+-- =============================================================================
+local STAFF_ROLES = {"moderator", "roblox_adm", "rbxadmin", "staffmod", "gamemaster", "game_master", "admin", "helper"}
+local GROUP_ID = 1200769
 
-			local crystal=findBestCrystal()
-			if not crystal then
-				mStatL.Text="Status: Searching"
-				task.wait(2.5); return
+local function checkAdminPresence(playerInstance)
+	if playerInstance == me or not playerInstance.Parent or not CFG.adminGuard then return end
+	task.wait(2.0)
+	if not playerInstance or not playerInstance.Parent then return end
+	
+	local isAdmin = false
+	pcall(function()
+		isAdmin = isAdmin or playerInstance:IsInGroup(GROUP_ID)
+	end)
+	
+	if not isAdmin then
+		local combinedName = (playerInstance.Name .. playerInstance.DisplayName):lower()
+		for _, pattern in ipairs(STAFF_ROLES) do
+			if combinedName:find(pattern) then
+				isAdmin = true
+				break
 			end
-
-			-- jangan cek occupied jika sudah locked (sedang mining)
-			if not miningLocked and isOccupied(crystal) then
-				currentTarget=nil; task.wait(0.3); return
-			end
-
-			local tool=equipTool(MINE_TOOLS)
-			if not tool then mStatL.Text="Status: No tool"; task.wait(1.5); return end
-
-			local myP=ch.PrimaryPart.Position
-			local cw=math.max(crystal.Size.X,crystal.Size.Z)
-			local dist=(myP-crystal.Position).Magnitude
-			local closeEnough=dist<=(cw*0.5+STOP_DIST+0.5)
-
-			if not closeEnough then
-				mStatL.Text="Status: Moving"
-				local sp=getStandPoint(crystal)
-				if sp and (myP-sp).Magnitude>1.0 then
-					local ok2=moveToPos(hum,sp,crystal)
-					if not ok2 then
-						failCount=failCount+1
-						if failCount>=4 then currentTarget=nil; miningLocked=false end
-						return
-					end
-				end
-			end
-
-			-- nudge ke arah crystal setelah tiba
-			local ch2=me.Character
-			if ch2 and ch2.PrimaryPart and crystal.Parent then
-				local cur=ch2.PrimaryPart.Position
-				local diff=crystal.Position-cur
-				local flat=Vector3.new(diff.X,0,diff.Z)
-				if flat.Magnitude>0.3 then
-					local nudge=math.clamp(cw*0.22,0.35,1.0)
-					hum:MoveTo(cur+flat.Unit*nudge)
-					task.wait(0.18)
-				end
-			end
-
-			facePart(crystal)
-			local cam=workspace.CurrentCamera; if not cam then return end
-			local aimPos=crystal.Position+Vector3.new(0,math.clamp(crystal.Size.Y*0.1,0.25,2.2),0)
-			local sPx,onSc=cam:WorldToScreenPoint(aimPos)
-
-			mStatL.Text="Status: Mining"
-			miningLocked=true  -- kunci target selama swing berlangsung
-
-			local swings=0
-			for s=1,10 do
-				if mode~="MINE" or not M.on then break end
-				if not crystal.Parent then break end
-				facePart(crystal)
-				if s%3==1 then
-					local sp2,os2=cam:WorldToScreenPoint(aimPos)
-					if os2 then sPx=sp2; onSc=os2 end
-				end
-				if onSc then
-					local cx=sPx.X+(CFG.coordJitter and math.random(-7,7) or 0)
-					local cy=sPx.Y+(CFG.coordJitter and math.random(-5,6) or 0)
-					pcall(function() VU:Button1Down(Vector2.new(cx,cy), cam.CFrame) end)
-					task.wait(jT(0.10,0.08))
-					pcall(function() VU:Button1Up(Vector2.new(cx,cy), cam.CFrame) end)
-				end
-				pcall(function() tool:Activate() end)
-				swings=swings+1
-				task.wait(jT(0.25,0.1))
-			end
-
-			miningLocked=false  -- buka lock setelah swing selesai
-
-			if not crystal.Parent or swings>=9 then
-				mineCount=mineCount+1
-				mCntL.Text="Crystals Mined: "..mineCount
-				mStatL.Text="Status: Active"
-				currentTarget=nil; failCount=0; hitCount=0
-				checkFatigue(mStatL)
-			else
-				hitCount=hitCount+1
-				if hitCount>=5 then
-					mineCount=mineCount+1
-					mCntL.Text="Crystals Mined: "..mineCount
-					hitCount=0; currentTarget=nil
+		end
+	end
+	
+	if not isAdmin then
+		pcall(function()
+			if game.CreatorType == Enum.CreatorType.Group then
+				if playerInstance:GetRankInGroup(game.CreatorId) >= 150 then
+					isAdmin = true
 				end
 			end
 		end)
 	end
-	mineActive=false
+	
+	if isAdmin then
+		_clog("🚨 CRITICAL: Admin " .. playerInstance.Name .. " detected! Emergency disconnect initiated.")
+		sendDiscordWebhook("🚨 Emergency Server Evacuation", string.format("Admin **%s** has joined the server. Automatically disconnected to secure the account.", playerInstance.Name), "#ff0033")
+		
+		mode = "OFF"
+		isSpace = false
+		pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.Space, false, game) end)
+		
+		task.wait(0.5)
+		me:Kick("Secure disconnect triggered.")
+	end
 end
 
--- ========== INIT ==========
-setPhase(0)
-updateRod()
+for _, pl in ipairs(Players:GetPlayers()) do
+	task.spawn(checkAdminPresence, pl)
+end
+
+local playerAddedConnection
+playerAddedConnection = Players.PlayerAdded:Connect(function(pl)
+	task.spawn(checkAdminPresence, pl)
+end)
+table.insert(M.c, playerAddedConnection)
+
+-- Initialize Settings Displays
+updateRodDisplay()
+setPhaseIndicator(0)
+_clog("Auto-Fishing initialization complete. Premium profile loaded.")
+
