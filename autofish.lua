@@ -218,7 +218,7 @@ local function mkLbl(parent, text, size, font, color)
 	l.BackgroundTransparency = 1
 	l.Text           = text or ""
 	l.TextSize       = size or 11
-	l.Font           = font or Enum.Font.GothamMedium
+	l.Font           = font or Enum.Font.Gotham
 	l.TextColor3     = color or C.txt
 	l.TextXAlignment = Enum.TextXAlignment.Left
 	l.TextTruncate   = Enum.TextTruncate.AtEnd
@@ -237,7 +237,7 @@ local function mkBtn(parent, text, bg, tc, textSize)
 	b.AutoButtonColor  = false
 	rnd(b, 5)
 	local orig = b.BackgroundColor3
-	local hi   = orig:Lerp(Color3.fromRGB(255, 255, 255), 0.07)
+	local hi   = orig:Lerp(C.gold, 0.18)
 	b.MouseEnter:Connect(function()
 		TS:Create(b, TweenInfo.new(0.12), {BackgroundColor3 = hi}):Play()
 	end)
@@ -253,7 +253,7 @@ local function mkToggle(parent, y, labelText, defVal, callback)
 	row.Position          = UDim2.new(0, 12, 0, y)
 	row.BackgroundTransparency = 1
 
-	local lbl = mkLbl(row, labelText, 10, Enum.Font.GothamMedium, C.dim)
+	local lbl = mkLbl(row, labelText, 10, Enum.Font.Gotham, C.dim)
 	lbl.Size     = UDim2.new(1, -50, 1, 0)
 	lbl.Position = UDim2.new(0, 0, 0, 0)
 
@@ -269,7 +269,7 @@ local function mkToggle(parent, y, labelText, defVal, callback)
 	local knob = Instance.new("Frame", sw)
 	knob.Size              = UDim2.new(0, 14, 0, 14)
 	knob.Position          = defVal and UDim2.new(1,-16,0.5,-7) or UDim2.new(0,2,0.5,-7)
-	knob.BackgroundColor3  = Color3.new(1, 1, 1)
+	knob.BackgroundColor3  = C.txt
 	knob.BorderSizePixel   = 0
 	rnd(knob, 7)
 
@@ -345,19 +345,19 @@ hdrDiv.BorderSizePixel  = 0
 
 -- Gold accent mark
 local mark = Instance.new("Frame", hdr)
-mark.Size             = UDim2.new(0, 3, 0, 22)
-mark.Position         = UDim2.new(0, 12, 0.5, -11)
+mark.Size             = UDim2.new(0, 3, 0, 20)
+mark.Position         = UDim2.new(0, 10, 0.5, -10)
 mark.BackgroundColor3 = C.gold
 mark.BorderSizePixel  = 0
 rnd(mark, 2)
 
 local titleL = mkLbl(hdr, "NazhanHub(free)", 12, Enum.Font.GothamBold, C.txt)
-titleL.Size     = UDim2.new(0, 210, 0, 17)
-titleL.Position = UDim2.new(0, 20, 0, 9)
+titleL.Size     = UDim2.new(0, 214, 0, 16)
+titleL.Position = UDim2.new(0, 17, 0, 9)
 
 local subL = mkLbl(hdr, "Auto Fishing System", 9, Enum.Font.Gotham, C.muted)
-subL.Size     = UDim2.new(0, 210, 0, 13)
-subL.Position = UDim2.new(0, 20, 0, 28)
+subL.Size     = UDim2.new(0, 214, 0, 13)
+subL.Position = UDim2.new(0, 17, 0, 27)
 
 local hideBtn = mkBtn(hdr, "—", C.bg, C.muted, 12)
 hideBtn.Size     = UDim2.new(0, 26, 0, 20)
@@ -424,7 +424,7 @@ for i, tname in ipairs(TABS) do
 	tb.BorderSizePixel  = 0
 	tb.Text             = tname
 	tb.TextColor3       = (i==1) and C.txt or C.muted
-	tb.Font             = Enum.Font.GothamMedium
+	tb.Font             = Enum.Font.Gotham
 	tb.TextSize         = 9
 	tabBtns[tname]      = tb
 
@@ -492,7 +492,7 @@ local function setDot(col)
 	stateDot.BackgroundColor3 = col
 	dotPulse = TS:Create(stateDot,
 		TweenInfo.new(0.65, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
-		{BackgroundColor3 = col:Lerp(Color3.new(1,1,1), 0.55)})
+		{BackgroundColor3 = col:Lerp(C.txt, 0.42)})
 	dotPulse:Play()
 end
 setDot(C.muted)
@@ -798,7 +798,7 @@ renderSpots = function()
 		rnd(row, 5)
 		mkStroke(row, C.border)
 
-		local nameLbl = mkLbl(row, sp.name, 10, Enum.Font.GothamMedium, C.txt)
+		local nameLbl = mkLbl(row, sp.name, 10, Enum.Font.Gotham, C.txt)
 		nameLbl.Size     = UDim2.new(1, -110, 1, 0)
 		nameLbl.Position = UDim2.new(0, 10, 0, 0)
 
@@ -960,7 +960,7 @@ wBox.Size = UDim2.new(1, -24, 0, 26); wBox.Position = UDim2.new(0, 12, 0, ny)
 wBox.BackgroundColor3 = C.card; wBox.TextColor3 = C.txt
 wBox.PlaceholderText = "https://discord.com/api/webhooks/..."
 wBox.PlaceholderColor3 = C.muted; wBox.Text = webhookURL
-wBox.ClearTextOnFocus = false; wBox.Font = Enum.Font.Code
+wBox.ClearTextOnFocus = false; wBox.Font = Enum.Font.Gotham
 wBox.TextSize = 8.5; wBox.TextXAlignment = Enum.TextXAlignment.Left
 wBox.BorderSizePixel = 0
 rnd(wBox, 5); mkStroke(wBox, C.border)
@@ -985,86 +985,6 @@ nInfo.TextWrapped = true; ny = ny + 32
 
 nSF.CanvasSize = UDim2.new(0, 0, 0, ny + 8)
 
--- Tutorial card
-local tutCard = Instance.new("Frame", pN)
-tutCard.Size             = UDim2.new(1, -20, 0, 118)
-tutCard.Position         = UDim2.new(0, 10, 0, 10)
-tutCard.BackgroundColor3 = C.card
-tutCard.BorderSizePixel  = 0
-rnd(tutCard, 7)
-mkStroke(tutCard, C.border)
-
-local tutHdrL = mkLbl(tutCard, "CARA MENAMBAHKAN WEBHOOK", 8, Enum.Font.GothamBold, C.gold)
-tutHdrL.Size     = UDim2.new(1, -16, 0, 12)
-tutHdrL.Position = UDim2.new(0, 10, 0, 8)
-
-local tutText = [[1. Buka server Discord kamu
-2. Klik Edit Channel pada channel tujuan
-3. Pilih tab Integrations, lalu Webhooks
-4. Klik New Webhook, beri nama bebas
-5. Klik Copy Webhook URL
-6. Paste URL di kotak di bawah ini
-7. Aktifkan toggle, lalu tekan Test Notif]]
-
-local tutL = Instance.new("TextLabel", tutCard)
-tutL.BackgroundTransparency = 1
-tutL.Size     = UDim2.new(1, -16, 0, 96)
-tutL.Position = UDim2.new(0, 10, 0, 20)
-tutL.Text     = tutText
-tutL.TextColor3 = C.dim
-tutL.Font     = Enum.Font.Gotham
-tutL.TextSize = 9
-tutL.TextXAlignment  = Enum.TextXAlignment.Left
-tutL.TextYAlignment  = Enum.TextYAlignment.Top
-tutL.TextWrapped     = true
-
--- Notif dikirim saat:
-local notifWhenL = mkLbl(pN, "Notif dikirim saat: tangkapan (tiap 10 ikan), watchdog reset, admin masuk.", 8.5, Enum.Font.Gotham, C.muted)
-notifWhenL.Size     = UDim2.new(1, -20, 0, 24)
-notifWhenL.Position = UDim2.new(0, 10, 0, 132)
-notifWhenL.TextWrapped = true
-
-mkSep(pN, 160)
-
--- URL input
-local wLabel = mkLbl(pN, "WEBHOOK URL", 8, Enum.Font.GothamBold, C.muted)
-wLabel.Size     = UDim2.new(1, -20, 0, 12)
-wLabel.Position = UDim2.new(0, 10, 0, 168)
-
-local wBox = Instance.new("TextBox", pN)
-wBox.Size             = UDim2.new(1, -20, 0, 24)
-wBox.Position         = UDim2.new(0, 10, 0, 183)
-wBox.BackgroundColor3 = C.card
-wBox.TextColor3       = C.txt
-wBox.PlaceholderText  = "https://discord.com/api/webhooks/..."
-wBox.PlaceholderColor3= C.muted
-wBox.Text             = webhookURL
-wBox.ClearTextOnFocus = false
-wBox.Font             = Enum.Font.Code
-wBox.TextSize         = 8.5
-wBox.TextXAlignment   = Enum.TextXAlignment.Left
-wBox.BorderSizePixel  = 0
-rnd(wBox, 5)
-mkStroke(wBox, C.border)
-
-local wbPad = Instance.new("UIPadding", wBox)
-wbPad.PaddingLeft = UDim.new(0, 8)
-
-wBox.FocusLost:Connect(function() webhookURL = wBox.Text end)
-
--- Toggle + Test row
-mkToggle(pN, 213, "Kirim Notifikasi Discord", false, function(v)
-	webhookOn = v
-end)
-
-local testBtn = mkBtn(pN, "Test Notif", C.bg, C.gold, 9.5)
-testBtn.Size     = UDim2.new(0, 80, 0, 20)
-testBtn.Position = UDim2.new(1, -90, 0, 215)
-mkStroke(testBtn, C.border)
-
-testBtn.MouseButton1Click:Connect(function()
-	sendWebhook("Test Notifikasi", "Webhook berhasil terhubung dari Roblox.", 0xb49352)
-end)
 
 -- ════════════════════════════════════════════════════
 -- TAB 5 — LOG (Console)
@@ -1119,7 +1039,7 @@ local function addLog(txt)
 	row.BackgroundTransparency = 1
 	row.Text         = string.format("[%s] %s", os.date("%H:%M:%S"), tostring(txt))
 	row.TextColor3   = C.dim
-	row.Font         = Enum.Font.Code
+	row.Font         = Enum.Font.Gotham
 	row.TextSize     = 8.5
 	row.TextXAlignment = Enum.TextXAlignment.Left
 	row.TextWrapped  = true
