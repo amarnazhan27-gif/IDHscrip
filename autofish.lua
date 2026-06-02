@@ -150,7 +150,7 @@ local function sendWebhook(title, body, colorInt)
 					  inline = true },
 					{ name = "Rod",  value = rod.n, inline = true },
 				},
-				footer = { text = "Nazhan Fish v2.0" },
+				footer = { text = "NasiHub v2.0" },
 			}},
 		})
 		if not ok then return end
@@ -188,18 +188,18 @@ if not pcall(function() gui.Parent = game:GetService("CoreGui") end) then
 	gui.Parent = me:WaitForChild("PlayerGui")
 end
 
--- ── Palette: Warm Charcoal + Gold (satu warna aksen)
+-- ── Palette: Pure Dark + Warm Gold (minimal elegant)
 local C = {
-	bg     = Color3.fromRGB(13,  12,  11),
-	bg2    = Color3.fromRGB(19,  18,  15),
-	card   = Color3.fromRGB(24,  22,  19),
-	border = Color3.fromRGB(44,  40,  33),
-	gold   = Color3.fromRGB(176, 140,  76),
-	txt    = Color3.fromRGB(232, 226, 213),
-	dim    = Color3.fromRGB(148, 140, 124),
-	muted  = Color3.fromRGB( 72,  67,  57),
-	swOn   = Color3.fromRGB(176, 140,  76),
-	swOff  = Color3.fromRGB( 32,  30,  25),
+	bg     = Color3.fromRGB(11,  11,  13),
+	bg2    = Color3.fromRGB(16,  16,  19),
+	card   = Color3.fromRGB(20,  20,  24),
+	border = Color3.fromRGB(32,  32,  38),
+	gold   = Color3.fromRGB(170, 138,  78),
+	txt    = Color3.fromRGB(218, 213, 203),
+	dim    = Color3.fromRGB(105, 102,  96),
+	muted  = Color3.fromRGB( 48,  46,  44),
+	swOn   = Color3.fromRGB(170, 138,  78),
+	swOff  = Color3.fromRGB( 26,  26,  31),
 }
 
 -- ── GUI Builder Helpers ──────────────────────────────
@@ -295,47 +295,39 @@ local function mkSep(parent, y)
 	return f
 end
 
--- ── Main Frame ───────────────────────────────────────
+-- ── Main Frame ──────────────────────────────────
 local main = Instance.new("Frame", gui)
-main.Size             = UDim2.new(0, 268, 0, 384)
-main.Position         = UDim2.new(1, -286, 0.5, -192)
+main.Size             = UDim2.new(0, 240, 0, 358)
+main.Position         = UDim2.new(1, -256, 0.5, -179)
 main.BackgroundColor3 = C.bg
-main.BackgroundTransparency = 0.03
+main.BackgroundTransparency = 0
 main.BorderSizePixel  = 0
 main.Active           = true
 main.Draggable        = true
-rnd(main, 11)
+rnd(main, 8)
 mkStroke(main, C.border, 1)
 
--- Float button (visible when hidden, draggable)
+-- Float button (visible saat disembunyikan, bisa digeser)
 local floatBtn = Instance.new("TextButton", gui)
-floatBtn.Size             = UDim2.new(0, 42, 0, 42)
-floatBtn.Position         = UDim2.new(1, -56, 0.5, -21)
+floatBtn.Size             = UDim2.new(0, 36, 0, 36)
+floatBtn.Position         = UDim2.new(1, -48, 0.5, -18)
 floatBtn.BackgroundColor3 = C.bg2
-floatBtn.Text             = "NF"
+floatBtn.Text             = "NH"
 floatBtn.TextColor3       = C.gold
 floatBtn.Font             = Enum.Font.GothamBold
-floatBtn.TextSize         = 11
+floatBtn.TextSize         = 10
 floatBtn.BorderSizePixel  = 0
 floatBtn.Active           = true
 floatBtn.Draggable        = true
 floatBtn.Visible          = false
-rnd(floatBtn, 21)
-mkStroke(floatBtn, C.gold, 1)
+rnd(floatBtn, 18)
+mkStroke(floatBtn, C.border, 1)
 
--- ── Header ───────────────────────────────────────────
+-- ── Header (clean, minimal) ────────────────────────────
 local hdr = Instance.new("Frame", main)
-hdr.Size             = UDim2.new(1, 0, 0, 48)
-hdr.BackgroundColor3 = C.bg2
+hdr.Size             = UDim2.new(1, 0, 0, 44)
+hdr.BackgroundColor3 = C.bg
 hdr.BorderSizePixel  = 0
-rnd(hdr, 11)
-
--- Cover lower-half corner rounding
-local hdrFlat = Instance.new("Frame", hdr)
-hdrFlat.Size             = UDim2.new(1, 0, 0.5, 0)
-hdrFlat.Position         = UDim2.new(0, 0, 0.5, 0)
-hdrFlat.BackgroundColor3 = C.bg2
-hdrFlat.BorderSizePixel  = 0
 
 local hdrDiv = Instance.new("Frame", hdr)
 hdrDiv.Size             = UDim2.new(1, 0, 0, 1)
@@ -343,25 +335,17 @@ hdrDiv.Position         = UDim2.new(0, 0, 1, -1)
 hdrDiv.BackgroundColor3 = C.border
 hdrDiv.BorderSizePixel  = 0
 
--- Gold accent mark
-local mark = Instance.new("Frame", hdr)
-mark.Size             = UDim2.new(0, 3, 0, 20)
-mark.Position         = UDim2.new(0, 10, 0.5, -10)
-mark.BackgroundColor3 = C.gold
-mark.BorderSizePixel  = 0
-rnd(mark, 2)
+local titleL = mkLbl(hdr, "NasiHub", 13, Enum.Font.GothamBold, C.txt)
+titleL.Size     = UDim2.new(0, 180, 0, 18)
+titleL.Position = UDim2.new(0, 14, 0, 8)
 
-local titleL = mkLbl(hdr, "NazhanHub(free)", 12, Enum.Font.GothamBold, C.txt)
-titleL.Size     = UDim2.new(0, 214, 0, 16)
-titleL.Position = UDim2.new(0, 17, 0, 9)
+local subL = mkLbl(hdr, "Auto Fishing System", 8, Enum.Font.Gotham, C.dim)
+subL.Size     = UDim2.new(0, 180, 0, 12)
+subL.Position = UDim2.new(0, 14, 0, 27)
 
-local subL = mkLbl(hdr, "Auto Fishing System", 9, Enum.Font.Gotham, C.muted)
-subL.Size     = UDim2.new(0, 214, 0, 13)
-subL.Position = UDim2.new(0, 17, 0, 27)
-
-local hideBtn = mkBtn(hdr, "—", C.bg, C.muted, 12)
-hideBtn.Size     = UDim2.new(0, 26, 0, 20)
-hideBtn.Position = UDim2.new(1, -34, 0.5, -10)
+local hideBtn = mkBtn(hdr, "×", C.bg, C.dim, 13)
+hideBtn.Size     = UDim2.new(0, 24, 0, 20)
+hideBtn.Position = UDim2.new(1, -28, 0.5, -10)
 
 -- ── Hide / Show ──────────────────────────────────────
 local savedPos = main.Position
@@ -372,13 +356,13 @@ local function doHide(h)
 	if h then
 		savedPos = main.Position
 		TS:Create(main, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
-			{Position = UDim2.new(1, 10, 0.5, -192)}):Play()
+			{Position = UDim2.new(1, 10, 0.5, -179)}):Play()
 		task.delay(0.21, function()
 			if isHid then main.Visible = false; floatBtn.Visible = true end
 		end)
 	else
 		main.Visible = true; floatBtn.Visible = false
-		main.Position = UDim2.new(1, 10, 0.5, -192)
+		main.Position = UDim2.new(1, 10, 0.5, -179)
 		TS:Create(main, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
 			{Position = savedPos}):Play()
 	end
@@ -386,11 +370,11 @@ end
 hideBtn.MouseButton1Click:Connect(function() doHide(true) end)
 floatBtn.MouseButton1Click:Connect(function() doHide(false) end)
 
--- ── Tab Bar ─────────────────────────────────────────
+-- ── Tab Bar ───────────────────────────────────────────────
 local tabBar = Instance.new("Frame", main)
-tabBar.Size             = UDim2.new(1, 0, 0, 28)
-tabBar.Position         = UDim2.new(0, 0, 0, 48)
-tabBar.BackgroundColor3 = C.bg2
+tabBar.Size             = UDim2.new(1, 0, 0, 26)
+tabBar.Position         = UDim2.new(0, 0, 0, 44)
+tabBar.BackgroundColor3 = C.bg
 tabBar.BorderSizePixel  = 0
 
 local tDiv = Instance.new("Frame", tabBar)
@@ -402,17 +386,16 @@ local tabBtns = {}
 local panels  = {}
 local numTabs = #TABS
 
--- pill indicator
+-- thin underline indicator
 local pill = Instance.new("Frame", tabBar)
-pill.Size             = UDim2.new(1/numTabs, -6, 0, 2)
-pill.Position         = UDim2.new(0, 3, 1, -2)
+pill.Size             = UDim2.new(1/numTabs, 0, 0, 1)
+pill.Position         = UDim2.new(0, 0, 1, -1)
 pill.BackgroundColor3 = C.gold
 pill.BorderSizePixel  = 0
-rnd(pill, 1)
 
 local body = Instance.new("Frame", main)
-body.Size             = UDim2.new(1, 0, 1, -76)
-body.Position         = UDim2.new(0, 0, 0, 76)
+body.Size             = UDim2.new(1, 0, 1, -70)
+body.Position         = UDim2.new(0, 0, 0, 70)
 body.BackgroundTransparency = 1
 body.ClipsDescendants = true
 
@@ -440,8 +423,8 @@ local function switchTab(name)
 	if activeTab == name then return end
 	activeTab = name
 	local idx = table.find(TABS, name)
-	TS:Create(pill, TweenInfo.new(0.15, Enum.EasingStyle.Quad),
-		{Position = UDim2.new((idx-1)/numTabs, 3, 1, -2)}):Play()
+	TS:Create(pill, TweenInfo.new(0.15, Enum.EasingStyle.Quart),
+		{Position = UDim2.new((idx-1)/numTabs, 0, 1, -1)}):Play()
 	for n, tb in pairs(tabBtns) do
 		tb.TextColor3    = (n==name) and C.txt or C.muted
 		panels[n].Visible = (n==name)
@@ -1532,8 +1515,8 @@ end)
 
 -- Startup notification
 task.delay(1.2, function()
-	sendWebhook("NazhanHub Aktif", "NazhanHub(free) v2.0 berhasil dijalankan.", 0xb49352)
+	sendWebhook("NasiHub Aktif", "NasiHub v2.0 berhasil dijalankan.", 0xb49352)
 end)
 
-addLog("NazhanHub(free) v2.0 siap.")
+addLog("NasiHub v2.0 siap.")
 setPhase(0)
