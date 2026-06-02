@@ -188,18 +188,18 @@ if not pcall(function() gui.Parent = game:GetService("CoreGui") end) then
 	gui.Parent = me:WaitForChild("PlayerGui")
 end
 
--- ── Palette: Pure Dark + Warm Gold (minimal elegant)
+-- ── Palette: NasiHub (BluuHub Style — dark + red accent)
 local C = {
-	bg     = Color3.fromRGB(11,  11,  13),
-	bg2    = Color3.fromRGB(16,  16,  19),
-	card   = Color3.fromRGB(20,  20,  24),
-	border = Color3.fromRGB(32,  32,  38),
-	gold   = Color3.fromRGB(170, 138,  78),
-	txt    = Color3.fromRGB(218, 213, 203),
-	dim    = Color3.fromRGB(105, 102,  96),
-	muted  = Color3.fromRGB( 48,  46,  44),
-	swOn   = Color3.fromRGB(170, 138,  78),
-	swOff  = Color3.fromRGB( 26,  26,  31),
+	bg        = Color3.fromRGB(14,  14,  16),
+	card      = Color3.fromRGB(24,  24,  28),
+	border    = Color3.fromRGB(38,  38,  44),
+	gold      = Color3.fromRGB(210,  52,  52),
+	txt       = Color3.fromRGB(218, 213, 203),
+	dim       = Color3.fromRGB(100,  98,  94),
+	muted     = Color3.fromRGB( 48,  46,  44),
+	navActive = Color3.fromRGB( 24,  24,  28),
+	swOn      = Color3.fromRGB(210,  52,  52),
+	swOff     = Color3.fromRGB( 36,  36,  42),
 }
 
 -- ── GUI Builder Helpers ──────────────────────────────
@@ -249,17 +249,20 @@ end
 
 local function mkToggle(parent, y, labelText, defVal, callback)
 	local row = Instance.new("Frame", parent)
-	row.Size              = UDim2.new(1, -24, 0, 28)
-	row.Position          = UDim2.new(0, 12, 0, y)
-	row.BackgroundTransparency = 1
+	row.Size              = UDim2.new(1, -16, 0, 36)
+	row.Position          = UDim2.new(0, 8, 0, y)
+	row.BackgroundColor3  = C.card
+	row.BorderSizePixel   = 0
+	rnd(row, 8)
+	mkStroke(row, C.border)
 
-	local lbl = mkLbl(row, labelText, 10, Enum.Font.Gotham, C.dim)
-	lbl.Size     = UDim2.new(1, -50, 1, 0)
-	lbl.Position = UDim2.new(0, 0, 0, 0)
+	local lbl = mkLbl(row, labelText, 9.5, Enum.Font.Gotham, C.txt)
+	lbl.Size     = UDim2.new(1, -54, 1, 0)
+	lbl.Position = UDim2.new(0, 12, 0, 0)
 
 	local sw = Instance.new("TextButton", row)
 	sw.Size              = UDim2.new(0, 34, 0, 18)
-	sw.Position          = UDim2.new(1, -34, 0.5, -9)
+	sw.Position          = UDim2.new(1, -44, 0.5, -9)
 	sw.BackgroundColor3  = defVal and C.swOn or C.swOff
 	sw.Text              = ""
 	sw.BorderSizePixel   = 0
@@ -295,23 +298,25 @@ local function mkSep(parent, y)
 	return f
 end
 
--- ── Main Frame ──────────────────────────────────
+-- ══════════════════════════════════════════════════
+-- LAYOUT: NasiHub (BluuHub Style)
+-- Window 432x288 | Sidebar 145px | Content 287px
+-- ══════════════════════════════════════════════════
 local main = Instance.new("Frame", gui)
-main.Size             = UDim2.new(0, 240, 0, 358)
-main.Position         = UDim2.new(1, -256, 0.5, -179)
+main.Size             = UDim2.new(0, 432, 0, 288)
+main.Position         = UDim2.new(1, -450, 0.5, -144)
 main.BackgroundColor3 = C.bg
 main.BackgroundTransparency = 0
 main.BorderSizePixel  = 0
 main.Active           = true
 main.Draggable        = true
-rnd(main, 8)
+rnd(main, 10)
 mkStroke(main, C.border, 1)
 
--- Float button (visible saat disembunyikan, bisa digeser)
 local floatBtn = Instance.new("TextButton", gui)
-floatBtn.Size             = UDim2.new(0, 36, 0, 36)
-floatBtn.Position         = UDim2.new(1, -48, 0.5, -18)
-floatBtn.BackgroundColor3 = C.bg2
+floatBtn.Size             = UDim2.new(0, 34, 0, 34)
+floatBtn.Position         = UDim2.new(1, -44, 0.5, -17)
+floatBtn.BackgroundColor3 = C.card
 floatBtn.Text             = "NH"
 floatBtn.TextColor3       = C.gold
 floatBtn.Font             = Enum.Font.GothamBold
@@ -320,733 +325,530 @@ floatBtn.BorderSizePixel  = 0
 floatBtn.Active           = true
 floatBtn.Draggable        = true
 floatBtn.Visible          = false
-rnd(floatBtn, 18)
+rnd(floatBtn, 17)
 mkStroke(floatBtn, C.border, 1)
 
--- ── Header (clean, minimal) ────────────────────────────
-local hdr = Instance.new("Frame", main)
-hdr.Size             = UDim2.new(1, 0, 0, 44)
-hdr.BackgroundColor3 = C.bg
-hdr.BorderSizePixel  = 0
+-- ─ TOP BAR ──────────────────────────────────────────────────
+local topBar = Instance.new("Frame", main)
+topBar.Size             = UDim2.new(1, 0, 0, 40)
+topBar.BackgroundColor3 = C.bg
+topBar.BorderSizePixel  = 0
 
-local hdrDiv = Instance.new("Frame", hdr)
-hdrDiv.Size             = UDim2.new(1, 0, 0, 1)
-hdrDiv.Position         = UDim2.new(0, 0, 1, -1)
-hdrDiv.BackgroundColor3 = C.border
-hdrDiv.BorderSizePixel  = 0
+do
+	local td = Instance.new("Frame", topBar)
+	td.Size=UDim2.new(1,0,0,1); td.Position=UDim2.new(0,0,1,-1)
+	td.BackgroundColor3=C.border; td.BorderSizePixel=0
+end
 
-local titleL = mkLbl(hdr, "NasiHub", 13, Enum.Font.GothamBold, C.txt)
-titleL.Size     = UDim2.new(0, 180, 0, 18)
-titleL.Position = UDim2.new(0, 14, 0, 8)
+local function mkDot(x,col)
+	local d=Instance.new("Frame",topBar)
+	d.Size=UDim2.new(0,10,0,10); d.Position=UDim2.new(0,x,0.5,-5)
+	d.BackgroundColor3=col; d.BorderSizePixel=0; rnd(d,5)
+end
+mkDot(12, Color3.fromRGB(255, 95, 87))
+mkDot(28, Color3.fromRGB(254,188, 47))
+mkDot(44, Color3.fromRGB( 40,200, 64))
 
-local subL = mkLbl(hdr, "Auto Fishing System", 8, Enum.Font.Gotham, C.dim)
-subL.Size     = UDim2.new(0, 180, 0, 12)
-subL.Position = UDim2.new(0, 14, 0, 27)
+local hubN=mkLbl(topBar,"NasiHub",11,Enum.Font.GothamBold,C.txt)
+hubN.Size=UDim2.new(0,90,0,16); hubN.Position=UDim2.new(0,62,0,6)
 
-local hideBtn = mkBtn(hdr, "×", C.bg, C.dim, 13)
-hideBtn.Size     = UDim2.new(0, 24, 0, 20)
-hideBtn.Position = UDim2.new(1, -28, 0.5, -10)
+local hubS=mkLbl(topBar,"Auto Fishing",8,Enum.Font.Gotham,C.dim)
+hubS.Size=UDim2.new(0,90,0,12); hubS.Position=UDim2.new(0,62,0,23)
 
--- ── Hide / Show ──────────────────────────────────────
-local savedPos = main.Position
-local isHid    = false
+local verBadge=mkBtn(topBar,"v2.0",C.card,C.dim,8.5)
+verBadge.Size=UDim2.new(0,46,0,20); verBadge.Position=UDim2.new(0,160,0.5,-10)
+rnd(verBadge,10); mkStroke(verBadge,C.border)
 
+local hideBtn=mkBtn(topBar,"×",C.bg,C.dim,16)
+hideBtn.Size=UDim2.new(0,22,0,22); hideBtn.Position=UDim2.new(1,-30,0.5,-11)
+
+-- ─ SIDEBAR ─────────────────────────────────────────────────
+local sidebar=Instance.new("Frame",main)
+sidebar.Size=UDim2.new(0,145,1,-40); sidebar.Position=UDim2.new(0,0,0,40)
+sidebar.BackgroundColor3=C.bg; sidebar.BorderSizePixel=0
+
+do
+	local sd=Instance.new("Frame",sidebar)
+	sd.Size=UDim2.new(0,1,1,0); sd.Position=UDim2.new(1,-1,0,0)
+	sd.BackgroundColor3=C.border; sd.BorderSizePixel=0
+end
+
+-- ─ CONTENT AREA ───────────────────────────────────────────
+local contentBg=Instance.new("Frame",main)
+contentBg.Size=UDim2.new(1,-145,1,-40); contentBg.Position=UDim2.new(0,145,0,40)
+contentBg.BackgroundColor3=C.card; contentBg.BorderSizePixel=0
+contentBg.ClipsDescendants=true
+
+-- ─ NAV ITEMS ───────────────────────────────────────────────
+local NAV={
+	{key="Mancing",label="Mancing",  icon="o"},
+	{key="Spot",   label="Spot",     icon="+"},
+	{key="Seting", label="Seting",   icon="S"},
+	{key="Notif",  label="Notif",    icon="N"},
+	{key="Log",    label="Log",      icon="L"},
+}
+local navBtns={}; local panels={}
+
+for i,item in ipairs(NAV) do
+	local ny=6+(i-1)*42
+	local btn=Instance.new("TextButton",sidebar)
+	btn.Size=UDim2.new(1,-10,0,36); btn.Position=UDim2.new(0,5,0,ny)
+	btn.BackgroundColor3=C.bg; btn.BorderSizePixel=0
+	btn.Text=""; btn.AutoButtonColor=false; rnd(btn,7)
+
+	local icoC=Instance.new("Frame",btn)
+	icoC.Size=UDim2.new(0,22,0,22); icoC.Position=UDim2.new(0,8,0.5,-11)
+	icoC.BackgroundColor3=C.border; icoC.BorderSizePixel=0; rnd(icoC,11)
+
+	local ico=Instance.new("TextLabel",icoC)
+	ico.BackgroundTransparency=1; ico.Size=UDim2.new(1,0,1,0)
+	ico.Text=item.icon; ico.Font=Enum.Font.GothamBold
+	ico.TextSize=8; ico.TextColor3=C.dim
+	ico.TextXAlignment=Enum.TextXAlignment.Center
+	ico.TextYAlignment=Enum.TextYAlignment.Center
+
+	local lbl=mkLbl(btn,item.label,9.5,Enum.Font.Gotham,C.dim)
+	lbl.Size=UDim2.new(1,-38,1,0); lbl.Position=UDim2.new(0,36,0,0)
+
+	navBtns[item.key]={btn=btn,icoC=icoC,ico=ico,lbl=lbl}
+
+	local p=Instance.new("ScrollingFrame",contentBg)
+	p.Size=UDim2.new(1,0,1,0)
+	p.BackgroundTransparency=1; p.BorderSizePixel=0
+	p.ScrollBarThickness=2; p.ScrollBarImageColor3=C.border
+	p.CanvasSize=UDim2.new(0,0,0,0); p.Visible=(i==1)
+	panels[item.key]=p
+end
+
+local activeNav="Mancing"
+local function switchNav(name)
+	if activeNav==name then return end
+	local old=navBtns[activeNav]
+	if old then
+		TS:Create(old.btn,TweenInfo.new(0.12),{BackgroundColor3=C.bg}):Play()
+		TS:Create(old.icoC,TweenInfo.new(0.12),{BackgroundColor3=C.border}):Play()
+		old.ico.TextColor3=C.dim; old.lbl.TextColor3=C.dim
+	end
+	activeNav=name
+	local nb=navBtns[name]
+	if nb then
+		TS:Create(nb.btn,TweenInfo.new(0.12),{BackgroundColor3=C.navActive}):Play()
+		TS:Create(nb.icoC,TweenInfo.new(0.12),{BackgroundColor3=C.gold}):Play()
+		nb.ico.TextColor3=C.bg; nb.lbl.TextColor3=C.txt
+	end
+	for n,p in pairs(panels) do p.Visible=(n==name) end
+end
+for name,nb in pairs(navBtns) do
+	nb.btn.MouseButton1Click:Connect(function() switchNav(name) end)
+end
+do -- set initial active
+	local nb=navBtns["Mancing"]
+	nb.btn.BackgroundColor3=C.navActive
+	nb.icoC.BackgroundColor3=C.gold
+	nb.ico.TextColor3=C.bg; nb.lbl.TextColor3=C.txt
+end
+
+-- ─ HIDE/SHOW ────────────────────────────────────────────────
+local savedPos=main.Position; local isHid=false
 local function doHide(h)
-	isHid = h
+	isHid=h
 	if h then
-		savedPos = main.Position
-		TS:Create(main, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
-			{Position = UDim2.new(1, 10, 0.5, -179)}):Play()
-		task.delay(0.21, function()
-			if isHid then main.Visible = false; floatBtn.Visible = true end
+		savedPos=main.Position
+		TS:Create(main,TweenInfo.new(0.18,Enum.EasingStyle.Quart,Enum.EasingDirection.In),
+			{Position=UDim2.new(1,10,0.5,-144)}):Play()
+		task.delay(0.19,function()
+			if isHid then main.Visible=false; floatBtn.Visible=true end
 		end)
 	else
-		main.Visible = true; floatBtn.Visible = false
-		main.Position = UDim2.new(1, 10, 0.5, -179)
-		TS:Create(main, TweenInfo.new(0.2, Enum.EasingStyle.Quad, Enum.EasingDirection.Out),
-			{Position = savedPos}):Play()
+		main.Visible=true; floatBtn.Visible=false
+		main.Position=UDim2.new(1,10,0.5,-144)
+		TS:Create(main,TweenInfo.new(0.18,Enum.EasingStyle.Quart,Enum.EasingDirection.Out),
+			{Position=savedPos}):Play()
 	end
 end
 hideBtn.MouseButton1Click:Connect(function() doHide(true) end)
 floatBtn.MouseButton1Click:Connect(function() doHide(false) end)
 
--- ── Tab Bar ───────────────────────────────────────────────
-local tabBar = Instance.new("Frame", main)
-tabBar.Size             = UDim2.new(1, 0, 0, 26)
-tabBar.Position         = UDim2.new(0, 0, 0, 44)
-tabBar.BackgroundColor3 = C.bg
-tabBar.BorderSizePixel  = 0
+-- ══ TAB 1: MANCING ═══════════════════════════════════
+local pM=panels["Mancing"]
 
-local tDiv = Instance.new("Frame", tabBar)
-tDiv.Size = UDim2.new(1, 0, 0, 1); tDiv.Position = UDim2.new(0, 0, 1, -1)
-tDiv.BackgroundColor3 = C.border; tDiv.BorderSizePixel = 0
-
-local TABS    = { "Mancing", "Spot", "Seting", "Notif", "Log" }
-local tabBtns = {}
-local panels  = {}
-local numTabs = #TABS
-
--- thin underline indicator
-local pill = Instance.new("Frame", tabBar)
-pill.Size             = UDim2.new(1/numTabs, 0, 0, 1)
-pill.Position         = UDim2.new(0, 0, 1, -1)
-pill.BackgroundColor3 = C.gold
-pill.BorderSizePixel  = 0
-
-local body = Instance.new("Frame", main)
-body.Size             = UDim2.new(1, 0, 1, -70)
-body.Position         = UDim2.new(0, 0, 0, 70)
-body.BackgroundTransparency = 1
-body.ClipsDescendants = true
-
-for i, tname in ipairs(TABS) do
-	local tb = Instance.new("TextButton", tabBar)
-	tb.Size             = UDim2.new(1/numTabs, 0, 1, -2)
-	tb.Position         = UDim2.new((i-1)/numTabs, 0, 0, 0)
-	tb.BackgroundTransparency = 1
-	tb.BorderSizePixel  = 0
-	tb.Text             = tname
-	tb.TextColor3       = (i==1) and C.txt or C.muted
-	tb.Font             = Enum.Font.Gotham
-	tb.TextSize         = 9
-	tabBtns[tname]      = tb
-
-	local p = Instance.new("Frame", body)
-	p.Size              = UDim2.new(1, 0, 1, 0)
-	p.BackgroundTransparency = 1
-	p.Visible           = (i==1)
-	panels[tname]       = p
+local function cTitle(p,txt,y)
+	local l=mkLbl(p,txt,10,Enum.Font.GothamBold,C.txt)
+	l.Size=UDim2.new(1,-20,0,14); l.Position=UDim2.new(0,10,0,y)
+	l.TextXAlignment=Enum.TextXAlignment.Center; return l
 end
 
-local activeTab = "Mancing"
-local function switchTab(name)
-	if activeTab == name then return end
-	activeTab = name
-	local idx = table.find(TABS, name)
-	TS:Create(pill, TweenInfo.new(0.15, Enum.EasingStyle.Quart),
-		{Position = UDim2.new((idx-1)/numTabs, 0, 1, -1)}):Play()
-	for n, tb in pairs(tabBtns) do
-		tb.TextColor3    = (n==name) and C.txt or C.muted
-		panels[n].Visible = (n==name)
-	end
-end
-for name, tb in pairs(tabBtns) do
-	tb.MouseButton1Click:Connect(function() switchTab(name) end)
-end
-
--- ════════════════════════════════════════════════════
--- TAB 1 — MANCING
--- ════════════════════════════════════════════════════
-local pM = panels["Mancing"]
+cTitle(pM,"AUTO FISHING",10)
 
 -- Status card
-local stCard = Instance.new("Frame", pM)
-stCard.Size             = UDim2.new(1, -20, 0, 60)
-stCard.Position         = UDim2.new(0, 10, 0, 10)
-stCard.BackgroundColor3 = C.card
-stCard.BorderSizePixel  = 0
-rnd(stCard, 7)
-mkStroke(stCard, C.border)
+local stCard=Instance.new("Frame",pM)
+stCard.Size=UDim2.new(1,-20,0,66); stCard.Position=UDim2.new(0,10,0,28)
+stCard.BackgroundColor3=C.bg; stCard.BorderSizePixel=0
+rnd(stCard,9); mkStroke(stCard,C.border)
 
--- State indicator dot
-local stateDot = Instance.new("Frame", stCard)
-stateDot.Size             = UDim2.new(0, 6, 0, 6)
-stateDot.Position         = UDim2.new(0, 10, 0, 11)
-stateDot.BackgroundColor3 = C.muted
-stateDot.BorderSizePixel  = 0
-rnd(stateDot, 3)
+local stateDot=Instance.new("Frame",stCard)
+stateDot.Size=UDim2.new(0,7,0,7); stateDot.Position=UDim2.new(0,12,0,14)
+stateDot.BackgroundColor3=C.muted; stateDot.BorderSizePixel=0; rnd(stateDot,4)
 
-local stateL = mkLbl(stCard, "Idle", 11, Enum.Font.GothamBold, C.txt)
-stateL.Size     = UDim2.new(1, -24, 0, 16)
-stateL.Position = UDim2.new(0, 20, 0, 5)
+local stateL=mkLbl(stCard,"Idle",10,Enum.Font.GothamBold,C.txt)
+stateL.Size=UDim2.new(1,-28,0,14); stateL.Position=UDim2.new(0,24,0,10)
 
-local fishCountL = mkLbl(stCard, "Tangkapan: 0 ikan", 9.5, Enum.Font.Gotham, C.dim)
-fishCountL.Size     = UDim2.new(1, -16, 0, 14)
-fishCountL.Position = UDim2.new(0, 10, 0, 24)
+local fishCountL=mkLbl(stCard,"Tangkapan: 0 ikan",9,Enum.Font.Gotham,C.dim)
+fishCountL.Size=UDim2.new(1,-20,0,13); fishCountL.Position=UDim2.new(0,12,0,28)
 
-local rateL = mkLbl(stCard, "Rate  —  |  Sesi  00:00:00", 9, Enum.Font.Gotham, C.muted)
-rateL.Size     = UDim2.new(1, -16, 0, 13)
-rateL.Position = UDim2.new(0, 10, 0, 40)
+local rateL=mkLbl(stCard,"Rate —  |  Sesi 00:00:00",8.5,Enum.Font.Gotham,C.muted)
+rateL.Size=UDim2.new(1,-20,0,12); rateL.Position=UDim2.new(0,12,0,44)
 
--- Dot pulse animation
 local dotPulse
 local function setDot(col)
 	if dotPulse then dotPulse:Cancel() end
-	stateDot.BackgroundColor3 = col
-	dotPulse = TS:Create(stateDot,
-		TweenInfo.new(0.65, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut, -1, true),
-		{BackgroundColor3 = col:Lerp(C.txt, 0.42)})
+	stateDot.BackgroundColor3=col
+	dotPulse=TS:Create(stateDot,
+		TweenInfo.new(0.65,Enum.EasingStyle.Sine,Enum.EasingDirection.InOut,-1,true),
+		{BackgroundColor3=col:Lerp(C.txt,0.42)})
 	dotPulse:Play()
 end
 setDot(C.muted)
 
--- Phase progress bar
-local phCont = Instance.new("Frame", pM)
-phCont.Size             = UDim2.new(1, -20, 0, 30)
-phCont.Position         = UDim2.new(0, 10, 0, 76)
-phCont.BackgroundTransparency = 1
+-- Phase bar
+local phCont=Instance.new("Frame",pM)
+phCont.Size=UDim2.new(1,-20,0,26); phCont.Position=UDim2.new(0,10,0,100)
+phCont.BackgroundTransparency=1; phCont.BorderSizePixel=0
 
-local barBg = Instance.new("Frame", phCont)
-barBg.Size             = UDim2.new(1, 0, 0, 2)
-barBg.Position         = UDim2.new(0, 0, 0, 5)
-barBg.BackgroundColor3 = C.border
-barBg.BorderSizePixel  = 0
-rnd(barBg, 1)
+local barBg=Instance.new("Frame",phCont)
+barBg.Size=UDim2.new(1,0,0,2); barBg.Position=UDim2.new(0,0,1,-4)
+barBg.BackgroundColor3=C.border; barBg.BorderSizePixel=0; rnd(barBg,1)
 
-local barFill = Instance.new("Frame", barBg)
-barFill.Size             = UDim2.new(0, 0, 1, 0)
-barFill.BackgroundColor3 = C.gold
-barFill.BorderSizePixel  = 0
-rnd(barFill, 1)
+local barFill=Instance.new("Frame",barBg)
+barFill.Size=UDim2.new(0,0,1,0); barFill.BackgroundColor3=C.gold
+barFill.BorderSizePixel=0; rnd(barFill,1)
 
-local phNames  = { "Cast", "Wait", "Game", "Done" }
-local phColors = { C.gold, C.gold, C.gold, C.gold }
-local phLbls   = {}
-for i, pn in ipairs(phNames) do
-	local pl = Instance.new("TextLabel", phCont)
-	pl.BackgroundTransparency = 1
-	pl.Size     = UDim2.new(0.25, 0, 0, 14)
-	pl.Position = UDim2.new((i-1)*0.25, 0, 0, 12)
-	pl.Text     = pn
-	pl.TextColor3 = C.muted
-	pl.Font     = Enum.Font.GothamBold
-	pl.TextSize = 9
-	phLbls[i]   = pl
+local phNames={"Cast","Wait","Game","Done"}; local phLbls={}
+for i,pn in ipairs(phNames) do
+	local pl=Instance.new("TextLabel",phCont)
+	pl.BackgroundTransparency=1
+	pl.Size=UDim2.new(1/#phNames,0,0,16)
+	pl.Position=UDim2.new((i-1)/#phNames,0,0,0)
+	pl.Text=pn; pl.Font=Enum.Font.Gotham; pl.TextSize=8
+	pl.TextColor3=C.muted; pl.TextXAlignment=Enum.TextXAlignment.Center; phLbls[i]=pl
 end
 
-local activePh = 0
-local function setPhase(ph)
-	activePh = ph
-	for i = 1, 4 do
-		if i < ph then        phLbls[i].TextColor3 = C.dim
-		elseif i == ph then   phLbls[i].TextColor3 = phColors[i]
-		else                  phLbls[i].TextColor3 = C.muted end
-	end
-	if ph == 0 then
-		TS:Create(barFill, TweenInfo.new(0.12),
-			{Size = UDim2.new(0,0,1,0), BackgroundColor3 = C.gold}):Play()
+local curPhase=0
+local function setPhase(n)
+	curPhase=n
+	for i,pl in ipairs(phLbls) do pl.TextColor3=(i<=n) and C.gold or C.muted end
+	TS:Create(barFill,TweenInfo.new(0.2,Enum.EasingStyle.Quart),
+		{Size=UDim2.new(n/#phNames,0,1,0)}):Play()
+end
+local function setPct(pct)
+	TS:Create(barFill,TweenInfo.new(0.1,Enum.EasingStyle.Linear),
+		{Size=UDim2.new(curPhase/#phNames+pct*(1/#phNames),0,1,0)}):Play()
+end
+
+-- Auto Fishing row
+local fishRow=Instance.new("Frame",pM)
+fishRow.Size=UDim2.new(1,-20,0,36); fishRow.Position=UDim2.new(0,10,0,134)
+fishRow.BackgroundColor3=C.bg; fishRow.BorderSizePixel=0
+rnd(fishRow,8); mkStroke(fishRow,C.border)
+
+local fishLbl=mkLbl(fishRow,"Auto Fishing",9.5,Enum.Font.Gotham,C.txt)
+fishLbl.Size=UDim2.new(1,-54,1,0); fishLbl.Position=UDim2.new(0,12,0,0)
+
+local fishSw=Instance.new("TextButton",fishRow)
+fishSw.Size=UDim2.new(0,34,0,18); fishSw.Position=UDim2.new(1,-44,0.5,-9)
+fishSw.BackgroundColor3=C.swOff; fishSw.Text=""; fishSw.BorderSizePixel=0
+fishSw.AutoButtonColor=false; rnd(fishSw,9)
+
+local fishKnob=Instance.new("Frame",fishSw)
+fishKnob.Size=UDim2.new(0,14,0,14); fishKnob.Position=UDim2.new(0,2,0.5,-7)
+fishKnob.BackgroundColor3=C.txt; fishKnob.BorderSizePixel=0; rnd(fishKnob,7)
+
+local fishOn=false
+fishSw.MouseButton1Click:Connect(function()
+	if not _S.alive then return end
+	fishOn=not fishOn
+	TS:Create(fishSw,TweenInfo.new(0.1),{BackgroundColor3=fishOn and C.swOn or C.swOff}):Play()
+	TS:Create(fishKnob,TweenInfo.new(0.1),
+		{Position=fishOn and UDim2.new(1,-16,0.5,-7) or UDim2.new(0,2,0.5,-7)}):Play()
+	active=fishOn
+	if fishOn then
+		fishState="IDLE"; idleAt=os.clock()
+		setDot(C.gold); setPhase(0); stateL.Text="Memulai..."
+		pcall(function()
+			local root=me.Character and me.Character:FindFirstChild("HumanoidRootPart")
+			if root then lastAFKPos=root.Position end
+		end)
 	else
-		TS:Create(barFill, TweenInfo.new(0.12), {
-			Size             = UDim2.new(math.clamp(ph*0.25,0,1),0,1,0),
-			BackgroundColor3 = phColors[ph],
-		}):Play()
-	end
-end
-
-local function setPct(f)
-	if activePh <= 0 then return end
-	barFill.Size = UDim2.new(math.clamp((activePh-1)*0.25 + f*0.25, 0, 1), 0, 1, 0)
-end
-
-mkSep(pM, 112)
-
--- Rod selector
-local rodCard = Instance.new("Frame", pM)
-rodCard.Size             = UDim2.new(1, -20, 0, 42)
-rodCard.Position         = UDim2.new(0, 10, 0, 118)
-rodCard.BackgroundColor3 = C.card
-rodCard.BorderSizePixel  = 0
-rnd(rodCard, 7)
-mkStroke(rodCard, C.border)
-
-local rodHdrL = mkLbl(rodCard, "ROD", 8, Enum.Font.GothamBold, C.muted)
-rodHdrL.Size     = UDim2.new(0, 40, 0, 12)
-rodHdrL.Position = UDim2.new(0, 10, 0, 5)
-
-local prevB = mkBtn(rodCard, "<", C.bg, C.dim, 10)
-prevB.Size     = UDim2.new(0, 20, 0, 18)
-prevB.Position = UDim2.new(0, 8, 0, 19)
-
-local nextB = mkBtn(rodCard, ">", C.bg, C.dim, 10)
-nextB.Size     = UDim2.new(0, 20, 0, 18)
-nextB.Position = UDim2.new(1, -28, 0, 19)
-
-local rodNameL = Instance.new("TextLabel", rodCard)
-rodNameL.BackgroundTransparency = 1
-rodNameL.Size     = UDim2.new(1, -64, 0, 18)
-rodNameL.Position = UDim2.new(0, 32, 0, 19)
-rodNameL.Text     = RODS[1].n
-rodNameL.TextColor3 = C.gold
-rodNameL.Font     = Enum.Font.GothamBold
-rodNameL.TextSize = 10
-rodNameL.TextXAlignment = Enum.TextXAlignment.Center
-
-local rodStatL = mkLbl(rodCard, "", 8, Enum.Font.Gotham, C.muted)
-rodStatL.Size     = UDim2.new(1, -16, 0, 12)
-rodStatL.Position = UDim2.new(0, 8, 0, 5)
-rodStatL.TextXAlignment = Enum.TextXAlignment.Right
-
-local function updateRod()
-	local r = RODS[rodIdx]
-	rodNameL.Text = r.n
-	rodStatL.Text = string.format("lure %.0f%%  prog %.0f%%", r.lure*100, r.prog*100)
-end
-updateRod()
-prevB.MouseButton1Click:Connect(function()
-	rodIdx = (rodIdx <= 1) and #RODS or rodIdx - 1; updateRod()
-end)
-nextB.MouseButton1Click:Connect(function()
-	rodIdx = (rodIdx >= #RODS) and 1 or rodIdx + 1; updateRod()
-end)
-
-mkSep(pM, 167)
-
--- Main toggle
-local doReset   -- forward declare
-local mainToggle= mkToggle(pM, 173, "Auto Fishing", false, function(on)
-	active = on
-	if on then
-		fishState = "IDLE"; idleAt = os.clock()
-		setDot(C.gold); setPhase(0); stateL.Text = "Memulai..."
-	else
-		active = false; isSpace = false
-		pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.Space, false, game) end)
-		setDot(C.muted); setPhase(0); stateL.Text = "Idle"
-		sendWebhook("Fishing Dihentikan", "Sistem auto-fishing dimatikan secara manual.", 0x888888)
+		active=false; isSpace=false
+		pcall(function() VIM:SendKeyEvent(false,Enum.KeyCode.Space,false,game) end)
+		setDot(C.muted); setPhase(0); stateL.Text="Idle"
+		sendWebhook("Fishing Dihentikan","Sistem dimatikan.",0x888888)
 	end
 end)
 
 -- Reset button
-local rstBtn = mkBtn(pM, "Reset", C.card, C.dim, 10)
-rstBtn.Size     = UDim2.new(1, -20, 0, 24)
-rstBtn.Position = UDim2.new(0, 10, 0, 208)
-mkStroke(rstBtn, C.border)
+local rstBtn=mkBtn(pM,"Reset",C.bg,C.dim,9.5)
+rstBtn.Size=UDim2.new(1,-20,0,28); rstBtn.Position=UDim2.new(0,10,0,178)
+mkStroke(rstBtn,C.border)
+rstBtn.MouseButton1Click:Connect(function() if doReset then doReset("manual") end end)
 
-rstBtn.MouseButton1Click:Connect(function()
-	if doReset then doReset("manual") end
-end)
+-- Rod row
+cTitle(pM,"ROD",214)
+local rodRow=Instance.new("Frame",pM)
+rodRow.Size=UDim2.new(1,-20,0,30); rodRow.Position=UDim2.new(0,10,0,232)
+rodRow.BackgroundColor3=C.bg; rodRow.BorderSizePixel=0
+rnd(rodRow,7); mkStroke(rodRow,C.border)
 
-mkSep(pM, 240)
+local rodName=mkLbl(rodRow,"—",9.5,Enum.Font.GothamBold,C.txt)
+rodName.Size=UDim2.new(0.55,0,1,0); rodName.Position=UDim2.new(0,10,0,0)
 
--- Session stats row (kecil di bawah)
-local sessRateL = mkLbl(pM, "Rate  —  ikan/jam", 8.5, Enum.Font.Gotham, C.muted)
-sessRateL.Size     = UDim2.new(0.5, -14, 0, 12)
-sessRateL.Position = UDim2.new(0, 10, 0, 248)
+local rodStat=mkLbl(rodRow,"—",8.5,Enum.Font.Gotham,C.dim)
+rodStat.Size=UDim2.new(0.45,-10,1,0); rodStat.Position=UDim2.new(0.55,0,0,0)
+rodStat.TextXAlignment=Enum.TextXAlignment.Right
 
-local sessTimeL = mkLbl(pM, "00:00:00", 8.5, Enum.Font.Gotham, C.muted)
-sessTimeL.Size             = UDim2.new(0.5, -6, 0, 12)
-sessTimeL.Position         = UDim2.new(0.5, 4, 0, 248)
-sessTimeL.TextXAlignment   = Enum.TextXAlignment.Right
+local function updateRodUI()
+	local rod=RODS[rodIdx]
+	if rod then
+		rodName.Text=rod.n
+		rodStat.Text=string.format("%.1f|%.1f",rod.spd or 0,rod.str or 0)
+	else rodName.Text="—"; rodStat.Text="—" end
+end
+updateRodUI()
 
--- Network lag hint
-local lagL = mkLbl(pM, "Jaringan: normal", 8, Enum.Font.Gotham, C.muted)
-lagL.Size     = UDim2.new(1, -20, 0, 12)
-lagL.Position = UDim2.new(0, 10, 0, 264)
+-- Session stats
+local sessRow=Instance.new("Frame",pM)
+sessRow.Size=UDim2.new(1,-20,0,24); sessRow.Position=UDim2.new(0,10,0,270)
+sessRow.BackgroundTransparency=1; sessRow.BorderSizePixel=0
 
--- Session timer thread
+local sessRateL=mkLbl(sessRow,"Rate —",8,Enum.Font.Gotham,C.dim)
+sessRateL.Size=UDim2.new(0.5,0,1,0); sessRateL.Position=UDim2.new(0,0,0,0)
+
+local sessTimeL=mkLbl(sessRow,"00:00:00",8,Enum.Font.Gotham,C.dim)
+sessTimeL.Size=UDim2.new(0.5,0,1,0); sessTimeL.Position=UDim2.new(0.5,0,0,0)
+sessTimeL.TextXAlignment=Enum.TextXAlignment.Right
+
+local lagL=mkLbl(pM,"Jaringan: normal",7.5,Enum.Font.Gotham,C.muted)
+lagL.Size=UDim2.new(1,-20,0,12); lagL.Position=UDim2.new(0,10,0,300)
+pM.CanvasSize=UDim2.new(0,0,0,316)
+
 task.spawn(function()
 	while _S.alive do
 		task.wait(1)
-		local el = os.clock() - sessStart
-		local h, m, s = math.floor(el/3600), math.floor(el%3600/60), math.floor(el%60)
-		local rate = fishCount > 0 and fishCount / math.max(el/3600, 0.01) or 0
-		sessRateL.Text = string.format("Rate  %.1f ikan/jam", rate)
-		sessTimeL.Text = string.format("%02d:%02d:%02d", h, m, s)
-		rateL.Text     = string.format("Rate %.1f/jam  |  Sesi %02d:%02d:%02d", rate, h, m, s)
-		-- lag indicator update
-		if lagAvg > 0.10 then
-			lagL.Text = "Jaringan: sangat lambat"
-			lagL.TextColor3 = C.dim
-		elseif lagAvg > 0.05 then
-			lagL.Text = "Jaringan: sedikit lag"
-			lagL.TextColor3 = C.dim
-		else
-			lagL.Text = "Jaringan: normal"
-			lagL.TextColor3 = C.muted
-		end
+		local el=os.clock()-sessStart
+		local h,m,s=math.floor(el/3600),math.floor(el%3600/60),math.floor(el%60)
+		local rate=fishCount>0 and fishCount/math.max(el/3600,0.01) or 0
+		sessRateL.Text=string.format("%.0f/jam",rate)
+		sessTimeL.Text=string.format("%02d:%02d:%02d",h,m,s)
+		rateL.Text=string.format("Rate %.0f/jam  |  %02d:%02d:%02d",rate,h,m,s)
+		if lagAvg>0.10 then lagL.Text="Jaringan: lambat"; lagL.TextColor3=C.dim
+		elseif lagAvg>0.05 then lagL.Text="Jaringan: sedikit lag"; lagL.TextColor3=C.dim
+		else lagL.Text="Jaringan: normal"; lagL.TextColor3=C.muted end
 	end
 end)
 
--- ════════════════════════════════════════════════════
--- TAB 2 — SPOT (Custom Locations)
--- ════════════════════════════════════════════════════
-local pT = panels["Spot"]
+-- ══ TAB 2: SPOT ══════════════════════════════════════
+local pT=panels["Spot"]
+cTitle(pT,"SPOT MANAGER",10)
 
--- Info label
-local spHdrL = mkLbl(pT, "LOKASI TERSIMPAN", 8, Enum.Font.GothamBold, C.muted)
-spHdrL.Size     = UDim2.new(0, 160, 0, 12)
-spHdrL.Position = UDim2.new(0, 10, 0, 10)
+local spCountL=mkLbl(pT,"0 / 10 spot",8.5,Enum.Font.Gotham,C.dim)
+spCountL.Size=UDim2.new(1,-20,0,12); spCountL.Position=UDim2.new(0,10,0,26)
+spCountL.TextXAlignment=Enum.TextXAlignment.Center
 
-local spCountL = mkLbl(pT, "0 / 10", 8, Enum.Font.Gotham, C.muted)
-spCountL.Size              = UDim2.new(1, -20, 0, 12)
-spCountL.Position          = UDim2.new(0, 10, 0, 10)
-spCountL.TextXAlignment    = Enum.TextXAlignment.Right
+local nameBox=Instance.new("TextBox",pT)
+nameBox.Size=UDim2.new(1,-80,0,30); nameBox.Position=UDim2.new(0,10,0,44)
+nameBox.BackgroundColor3=C.bg; nameBox.TextColor3=C.txt
+nameBox.PlaceholderText="Nama spot..."; nameBox.PlaceholderColor3=C.muted
+nameBox.Text=""; nameBox.ClearTextOnFocus=false
+nameBox.Font=Enum.Font.Gotham; nameBox.TextSize=9.5
+nameBox.TextXAlignment=Enum.TextXAlignment.Left; nameBox.BorderSizePixel=0
+rnd(nameBox,7); mkStroke(nameBox,C.border)
+Instance.new("UIPadding",nameBox).PaddingLeft=UDim.new(0,8)
 
-mkSep(pT, 26)
+local saveSpotBtn=mkBtn(pT,"Simpan",C.gold,C.bg,9.5)
+saveSpotBtn.Size=UDim2.new(0,62,0,30); saveSpotBtn.Position=UDim2.new(1,-72,0,44)
+rnd(saveSpotBtn,7)
 
--- Name input row
-local nameBox = Instance.new("TextBox", pT)
-nameBox.Size              = UDim2.new(1, -84, 0, 24)
-nameBox.Position          = UDim2.new(0, 10, 0, 32)
-nameBox.BackgroundColor3  = C.card
-nameBox.TextColor3        = C.txt
-nameBox.PlaceholderText   = "Nama lokasi..."
-nameBox.PlaceholderColor3 = C.muted
-nameBox.Text              = ""
-nameBox.ClearTextOnFocus  = false
-nameBox.Font              = Enum.Font.Gotham
-nameBox.TextSize          = 10
-nameBox.TextXAlignment    = Enum.TextXAlignment.Left
-nameBox.BorderSizePixel   = 0
-rnd(nameBox, 5)
-mkStroke(nameBox, C.border)
+local spSF=Instance.new("ScrollingFrame",pT)
+spSF.Size=UDim2.new(1,-20,1,-82); spSF.Position=UDim2.new(0,10,0,80)
+spSF.BackgroundTransparency=1; spSF.BorderSizePixel=0
+spSF.CanvasSize=UDim2.new(0,0,0,0); spSF.ScrollBarThickness=2
+spSF.ScrollBarImageColor3=C.border
 
--- Padding inside textbox
-local nbPad = Instance.new("UIPadding", nameBox)
-nbPad.PaddingLeft = UDim.new(0, 8)
+local spLL=Instance.new("UIListLayout",spSF)
+spLL.SortOrder=Enum.SortOrder.LayoutOrder; spLL.Padding=UDim.new(0,4)
 
-local saveSpotBtn = mkBtn(pT, "Simpan", C.gold, Color3.fromRGB(20,18,14), 10)
-saveSpotBtn.Size     = UDim2.new(0, 62, 0, 24)
-saveSpotBtn.Position = UDim2.new(1, -72, 0, 32)
-saveSpotBtn.TextColor3 = Color3.fromRGB(20, 18, 14)
-
-mkSep(pT, 62)
-
--- Scrollable spot list
-local spSF = Instance.new("ScrollingFrame", pT)
-spSF.Size                  = UDim2.new(1, 0, 1, -68)
-spSF.Position              = UDim2.new(0, 0, 0, 68)
-spSF.BackgroundTransparency = 1
-spSF.BorderSizePixel       = 0
-spSF.CanvasSize            = UDim2.new(0, 0, 0, 0)
-spSF.ScrollBarThickness    = 2
-spSF.ScrollBarImageColor3  = C.border
-spSF.AutomaticCanvasSize   = Enum.AutomaticSize.Y
-
-local spList = Instance.new("UIListLayout", spSF)
-spList.SortOrder  = Enum.SortOrder.LayoutOrder
-spList.Padding    = UDim.new(0, 4)
-
-local spPad = Instance.new("UIPadding", spSF)
-spPad.PaddingTop    = UDim.new(0, 6)
-spPad.PaddingLeft   = UDim.new(0, 10)
-spPad.PaddingRight  = UDim.new(0, 10)
-spPad.PaddingBottom = UDim.new(0, 6)
-
--- Platform spawner for teleport
 local function spawnPlat(pos)
 	pcall(function()
-		local old = workspace:FindFirstChild("_nzh_p")
-		if old then old:Destroy() end
-		local p = Instance.new("Part")
-		p.Name = "_nzh_p"; p.Anchored = true; p.CanCollide = true
-		p.Size = Vector3.new(14, 1, 14)
-		p.Position = pos - Vector3.new(0, 3.2, 0)
-		p.Material = Enum.Material.SmoothPlastic
-		p.Transparency = 0.7
-		p.Color = Color3.fromRGB(100, 80, 40)
-		p.Parent = workspace
+		local old=workspace:FindFirstChild("_nzh_p"); if old then old:Destroy() end
+		local p=Instance.new("Part")
+		p.Name="_nzh_p"; p.Anchored=true; p.CanCollide=true
+		p.Size=Vector3.new(14,1,14); p.Position=pos-Vector3.new(0,3.2,0)
+		p.Material=Enum.Material.SmoothPlastic; p.Transparency=0.7
+		p.Color=Color3.fromRGB(100,80,40); p.Parent=workspace
 	end)
 end
 
 local function doTeleport(pos)
-	local ch   = me.Character
-	local root = ch and ch:FindFirstChild("HumanoidRootPart")
+	local ch=me.Character; local root=ch and ch:FindFirstChild("HumanoidRootPart")
 	if not root then return end
-	lastAFKPos = pos   -- simpan untuk auto-rejoin
-	spawnPlat(pos)
-	task.wait(0.08)
-	root.CFrame = CFrame.new(pos)
+	lastAFKPos=pos; spawnPlat(pos); task.wait(0.08); root.CFrame=CFrame.new(pos)
 end
 
-local renderSpots  -- forward declare
-
-renderSpots = function()
-	-- clear existing rows (Frame dan TextLabel)
-	for _, ch in ipairs(spSF:GetChildren()) do
+local renderSpots
+renderSpots=function()
+	for _,ch in ipairs(spSF:GetChildren()) do
 		if ch:IsA("Frame") or ch:IsA("TextLabel") then ch:Destroy() end
 	end
-
-	spCountL.Text = string.format("%d / %d", #spots, MAX_SPOTS)
-
-	if #spots == 0 then
-		local none = Instance.new("TextLabel", spSF)
-		none.LayoutOrder  = 0
-		none.BackgroundTransparency = 1
-		none.Size         = UDim2.new(1, 0, 0, 36)
-		none.Text         = "Belum ada lokasi tersimpan."
-		none.TextColor3   = C.muted
-		none.Font         = Enum.Font.Gotham
-		none.TextSize     = 9.5
-		none.TextXAlignment = Enum.TextXAlignment.Center
-		return
+	spCountL.Text=string.format("%d / %d spot",#spots,MAX_SPOTS)
+	if #spots==0 then
+		local none=Instance.new("TextLabel",spSF)
+		none.LayoutOrder=0; none.BackgroundTransparency=1; none.Size=UDim2.new(1,0,0,40)
+		none.Text="Belum ada spot tersimpan"; none.TextColor3=C.muted
+		none.Font=Enum.Font.Gotham; none.TextSize=9
+		none.TextXAlignment=Enum.TextXAlignment.Center; return
 	end
+	for i,sp in ipairs(spots) do
+		local row=Instance.new("Frame",spSF)
+		row.LayoutOrder=i; row.Size=UDim2.new(1,0,0,38)
+		row.BackgroundColor3=C.bg; row.BorderSizePixel=0
+		rnd(row,8); mkStroke(row,C.border)
 
-	for i, sp in ipairs(spots) do
-		local row = Instance.new("Frame", spSF)
-		row.LayoutOrder       = i
-		row.Size              = UDim2.new(1, 0, 0, 32)
-		row.BackgroundColor3  = C.card
-		row.BorderSizePixel   = 0
-		rnd(row, 5)
-		mkStroke(row, C.border)
+		local nLbl=mkLbl(row,sp.name,9.5,Enum.Font.Gotham,C.txt)
+		nLbl.Size=UDim2.new(1,-110,1,0); nLbl.Position=UDim2.new(0,10,0,0)
 
-		local nameLbl = mkLbl(row, sp.name, 10, Enum.Font.Gotham, C.txt)
-		nameLbl.Size     = UDim2.new(1, -110, 1, 0)
-		nameLbl.Position = UDim2.new(0, 10, 0, 0)
+		local goBtn=mkBtn(row,"Pergi",C.gold,C.bg,9)
+		goBtn.Size=UDim2.new(0,46,0,24); goBtn.Position=UDim2.new(1,-100,0.5,-12)
 
-		local coordLbl = mkLbl(row, string.format("%.0f, %.0f, %.0f", sp.x, sp.y, sp.z), 7.5, Enum.Font.Gotham, C.muted)
-		coordLbl.Size     = UDim2.new(1, -110, 0, 10)
-		coordLbl.Position = UDim2.new(0, 10, 1, -12)
+		local delBtn=mkBtn(row,"Hapus",C.card,C.dim,9)
+		delBtn.Size=UDim2.new(0,46,0,24); delBtn.Position=UDim2.new(1,-50,0.5,-12)
+		mkStroke(delBtn,C.border)
 
-		local goBtn = mkBtn(row, "Pergi", C.gold, Color3.fromRGB(18,16,12), 9)
-		goBtn.Size     = UDim2.new(0, 46, 0, 20)
-		goBtn.Position = UDim2.new(1, -100, 0.5, -10)
-
-		local delBtn = mkBtn(row, "Hapus", C.card, C.dim, 9)
-		delBtn.Size     = UDim2.new(0, 44, 0, 20)
-		delBtn.Position = UDim2.new(1, -50, 0.5, -10)
-
-		-- capture i for closures
-		local capturedIdx = i
-		local capturedPos = Vector3.new(sp.x, sp.y, sp.z)
-
+		local ci=i; local cp=Vector3.new(sp.x,sp.y,sp.z)
 		goBtn.MouseButton1Click:Connect(function()
-			doTeleport(capturedPos)
-			stateL.Text = "Pindah ke " .. sp.name
+			doTeleport(cp); stateL.Text="Pindah ke "..sp.name
 		end)
-
 		delBtn.MouseButton1Click:Connect(function()
-			table.remove(spots, capturedIdx)
-			saveSpots()
-			renderSpots()
+			table.remove(spots,ci); saveSpots(); renderSpots()
 		end)
 	end
+	spSF.CanvasSize=UDim2.new(0,0,0,#spots*42+8)
 end
-
 renderSpots()
 
--- Save current position
 saveSpotBtn.MouseButton1Click:Connect(function()
-	local name = nameBox.Text:match("^%s*(.-)%s*$")  -- trim
-	if name == "" then name = "Spot " .. (#spots + 1) end
-	if #spots >= MAX_SPOTS then
-		stateL.Text = "Maksimal " .. MAX_SPOTS .. " spot"
-		return
-	end
-	local ch   = me.Character
-	local root = ch and ch:FindFirstChild("HumanoidRootPart")
+	local nm=nameBox.Text:match("^%s*(.-)%s*$")
+	if nm=="" then nm="Spot "..(#spots+1) end
+	if #spots>=MAX_SPOTS then stateL.Text="Max "..MAX_SPOTS.." spot"; return end
+	local ch=me.Character; local root=ch and ch:FindFirstChild("HumanoidRootPart")
 	if not root then return end
-	local p = root.Position
-	table.insert(spots, { name=name, x=p.X, y=p.Y, z=p.Z })
-	saveSpots()
-	nameBox.Text = ""
-	renderSpots()
+	local p=root.Position
+	table.insert(spots,{name=nm,x=p.X,y=p.Y,z=p.Z})
+	saveSpots(); nameBox.Text=""; renderSpots()
 end)
 
--- ════════════════════════════════════════════════════
--- TAB 3 — SETING
--- ════════════════════════════════════════════════════
-local pS = panels["Seting"]
-
-local sScroll = Instance.new("ScrollingFrame", pS)
-sScroll.Size               = UDim2.new(1, 0, 1, 0)
-sScroll.BackgroundTransparency = 1
-sScroll.BorderSizePixel    = 0
-sScroll.CanvasSize         = UDim2.new(0, 0, 0, 400)
-sScroll.ScrollBarThickness = 2
-sScroll.ScrollBarImageColor3 = C.border
-
-local function sSection(lbl, y)
-	local l = mkLbl(sScroll, lbl, 8, Enum.Font.GothamBold, C.muted)
-	l.Size = UDim2.new(1, -24, 0, 12)
-	l.Position = UDim2.new(0, 12, 0, y)
-	mkSep(sScroll, y + 14)
-	return l
+-- ══ TAB 3: SETING ═══════════════════════════════════
+local pS=panels["Seting"]
+local function sSec(lbl,y)
+	local l=mkLbl(pS,lbl,7,Enum.Font.GothamBold,C.muted)
+	l.Size=UDim2.new(1,-20,0,12); l.Position=UDim2.new(0,10,0,y); return l
 end
+local sy=10
+sSec("PEMANCIAN",sy); sy=sy+14
+mkToggle(pS,sy,"Jitter Timing Cast",     CFG.jitter,          function(v) CFG.jitter=v end); sy=sy+40
+mkToggle(pS,sy,"Jitter Posisi Kursor",   CFG.coordJitter,     function(v) CFG.coordJitter=v end); sy=sy+40
+mkToggle(pS,sy,"Istirahat Otomatis",     CFG.fatigueOn,       function(v) CFG.fatigueOn=v end); sy=sy+40
+sSec("JARINGAN",sy); sy=sy+14
+mkToggle(pS,sy,"Adaptasi Lag Jaringan",  CFG.netAdapt,        function(v) CFG.netAdapt=v end); sy=sy+40
+sSec("KARAKTER",sy); sy=sy+14
+mkToggle(pS,sy,"Auto Kembali ke Spot",   CFG.autoRejoin,      function(v) CFG.autoRejoin=v end); sy=sy+40
+mkToggle(pS,sy,"Tolak Carry Otomatis",   CFG.autoDeclineCarry,function(v) CFG.autoDeclineCarry=v end); sy=sy+40
+sSec("KEAMANAN",sy); sy=sy+14
+mkToggle(pS,sy,"Anti-AFK Mouse Sweep",   CFG.antiAFK,         function(v) CFG.antiAFK=v end); sy=sy+40
+mkToggle(pS,sy,"Admin Guard",            CFG.adminGuard,      function(v) CFG.adminGuard=v end); sy=sy+40
+mkToggle(pS,sy,"Watchdog Auto-Reset",    CFG.watchdog,        function(v) CFG.watchdog=v end); sy=sy+40
+pS.CanvasSize=UDim2.new(0,0,0,sy+10)
 
-local sy = 10
-sSection("PEMANCIAN", sy); sy = sy + 20
-mkToggle(sScroll, sy, "Jitter Timing Cast",   CFG.jitter,      function(v) CFG.jitter=v end);      sy=sy+32
-mkToggle(sScroll, sy, "Jitter Posisi Kursor", CFG.coordJitter, function(v) CFG.coordJitter=v end); sy=sy+32
-mkToggle(sScroll, sy, "Istirahat Otomatis",   CFG.fatigueOn,   function(v) CFG.fatigueOn=v end);   sy=sy+32
-
-sSection("JARINGAN", sy); sy=sy+20
-mkToggle(sScroll, sy, "Adaptasi Lag Jaringan", CFG.netAdapt, function(v) CFG.netAdapt=v end); sy=sy+32
-
-local lagHintL = mkLbl(sScroll, "Toleransi minigame dan watchdog otomatis diperlebar saat jaringan lambat.", 8.5, Enum.Font.Gotham, C.muted)
-lagHintL.Size = UDim2.new(1, -24, 0, 24); lagHintL.Position = UDim2.new(0, 12, 0, sy)
-lagHintL.TextWrapped = true; sy = sy + 30
-
-sSection("KARAKTER", sy); sy=sy+20
-mkToggle(sScroll, sy, "Auto Kembali ke Spot (Rejoin)", CFG.autoRejoin, function(v) CFG.autoRejoin=v end); sy=sy+32
-
-local rejoinHintL = mkLbl(sScroll, "Setelah mati atau respawn, otomatis teleport ke spot AFK terakhir.", 8.5, Enum.Font.Gotham, C.muted)
-rejoinHintL.Size = UDim2.new(1, -24, 0, 24); rejoinHintL.Position = UDim2.new(0, 12, 0, sy)
-rejoinHintL.TextWrapped = true; sy = sy + 30
-
-mkToggle(sScroll, sy, "Tolak Carry Otomatis", CFG.autoDeclineCarry, function(v) CFG.autoDeclineCarry=v end); sy=sy+32
-
-local carryHintL = mkLbl(sScroll, "Carry request dari pemain lain otomatis ditolak saat sedang mancing.", 8.5, Enum.Font.Gotham, C.muted)
-carryHintL.Size = UDim2.new(1, -24, 0, 24); carryHintL.Position = UDim2.new(0, 12, 0, sy)
-carryHintL.TextWrapped = true; sy = sy + 30
-
-sSection("KEAMANAN", sy); sy=sy+20
-mkToggle(sScroll, sy, "Anti-AFK Mouse Sweep",   CFG.antiAFK,    function(v) CFG.antiAFK=v end);    sy=sy+32
-mkToggle(sScroll, sy, "Admin Guard (Auto-Kick)", CFG.adminGuard, function(v) CFG.adminGuard=v end); sy=sy+32
-mkToggle(sScroll, sy, "Watchdog Auto-Reset",    CFG.watchdog,   function(v) CFG.watchdog=v end);   sy=sy+32
-
-sScroll.CanvasSize = UDim2.new(0, 0, 0, sy + 10)
-
--- ════════════════════════════════════════════════════
--- TAB 4 — NOTIF (Webhook)
--- ════════════════════════════════════════════════════
-local pN = panels["Notif"]
-
-local nSF = Instance.new("ScrollingFrame", pN)
-nSF.Size               = UDim2.new(1, 0, 1, 0)
-nSF.BackgroundTransparency = 1
-nSF.BorderSizePixel    = 0
-nSF.CanvasSize         = UDim2.new(0, 0, 0, 340)
-nSF.ScrollBarThickness = 2
-nSF.ScrollBarImageColor3 = C.border
-
--- Tutorial
-local function nLabel(txt, y, size, col)
-	local l = mkLbl(nSF, txt, size or 9, Enum.Font.Gotham, col or C.dim)
-	l.Size = UDim2.new(1, -24, 0, (size or 9) + 5)
-	l.Position = UDim2.new(0, 12, 0, y)
-	return l
+-- ══ TAB 4: NOTIF ═══════════════════════════════════
+local pN=panels["Notif"]
+cTitle(pN,"WEBHOOK DISCORD",10)
+local ny=28
+for _,ln in ipairs({"1. Edit Channel Discord kamu","2. Integrations > Webhooks > New","3. Copy URL lalu paste di bawah"}) do
+	local tl=mkLbl(pN,ln,8.5,Enum.Font.Gotham,C.dim)
+	tl.Size=UDim2.new(1,-20,0,13); tl.Position=UDim2.new(0,10,0,ny); ny=ny+14
 end
-
-local nHdr = mkLbl(nSF, "CARA MENAMBAHKAN WEBHOOK", 8, Enum.Font.GothamBold, C.muted)
-nHdr.Size = UDim2.new(1, -24, 0, 12); nHdr.Position = UDim2.new(0, 12, 0, 10)
-mkSep(nSF, 26)
-
-local tutLines = {
-	"1.  Buka server Discord kamu",
-	"2.  Klik Edit Channel pada channel tujuan",
-	"3.  Pilih tab Integrations, klik Webhooks",
-	"4.  Klik New Webhook dan beri nama bebas",
-	"5.  Klik Copy Webhook URL",
-	"6.  Paste URL di kolom di bawah ini",
-	"7.  Aktifkan toggle, lalu klik Test",
-}
-local ny = 32
-for _, ln in ipairs(tutLines) do
-	local tl = mkLbl(nSF, ln, 9, Enum.Font.Gotham, C.dim)
-	tl.Size = UDim2.new(1, -24, 0, 14); tl.Position = UDim2.new(0, 12, 0, ny)
-	ny = ny + 15
-end
-mkSep(nSF, ny + 4); ny = ny + 14
-
--- Konfigurasi
-local nCfgH = mkLbl(nSF, "KONFIGURASI", 8, Enum.Font.GothamBold, C.muted)
-nCfgH.Size = UDim2.new(1, -24, 0, 12); nCfgH.Position = UDim2.new(0, 12, 0, ny)
-ny = ny + 16; mkSep(nSF, ny); ny = ny + 8
-
--- URL label
-nLabel("Webhook URL", ny, 9, C.dim); ny = ny + 16
-
-local wBox = Instance.new("TextBox", nSF)
-wBox.Size = UDim2.new(1, -24, 0, 26); wBox.Position = UDim2.new(0, 12, 0, ny)
-wBox.BackgroundColor3 = C.card; wBox.TextColor3 = C.txt
-wBox.PlaceholderText = "https://discord.com/api/webhooks/..."
-wBox.PlaceholderColor3 = C.muted; wBox.Text = webhookURL
-wBox.ClearTextOnFocus = false; wBox.Font = Enum.Font.Gotham
-wBox.TextSize = 8.5; wBox.TextXAlignment = Enum.TextXAlignment.Left
-wBox.BorderSizePixel = 0
-rnd(wBox, 5); mkStroke(wBox, C.border)
-local wbP = Instance.new("UIPadding", wBox); wbP.PaddingLeft = UDim.new(0, 8)
-wBox.FocusLost:Connect(function() webhookURL = wBox.Text end)
-ny = ny + 32
-
-mkToggle(nSF, ny, "Aktifkan Notifikasi Discord", false, function(v) webhookOn = v end); ny = ny + 32
-
-local testBtn = mkBtn(nSF, "Kirim Test Notifikasi", C.card, C.dim, 9.5)
-testBtn.Size = UDim2.new(1, -24, 0, 26); testBtn.Position = UDim2.new(0, 12, 0, ny)
-mkStroke(testBtn, C.border)
+local wLbl=mkLbl(pN,"WEBHOOK URL",7,Enum.Font.GothamBold,C.muted)
+wLbl.Size=UDim2.new(1,-20,0,12); wLbl.Position=UDim2.new(0,10,0,ny+4)
+local wBox=Instance.new("TextBox",pN)
+wBox.Size=UDim2.new(1,-20,0,30); wBox.Position=UDim2.new(0,10,0,ny+18)
+wBox.BackgroundColor3=C.bg; wBox.TextColor3=C.txt
+wBox.PlaceholderText="https://discord.com/api/webhooks/..."
+wBox.PlaceholderColor3=C.muted; wBox.Text=webhookURL
+wBox.ClearTextOnFocus=false; wBox.Font=Enum.Font.Gotham
+wBox.TextSize=8.5; wBox.TextXAlignment=Enum.TextXAlignment.Left
+wBox.BorderSizePixel=0; rnd(wBox,7); mkStroke(wBox,C.border)
+Instance.new("UIPadding",wBox).PaddingLeft=UDim.new(0,8)
+wBox.FocusLost:Connect(function() webhookURL=wBox.Text end); ny=ny+54
+mkToggle(pN,ny,"Aktifkan Notifikasi",false,function(v) webhookOn=v end); ny=ny+44
+local testBtn=mkBtn(pN,"Kirim Test Notifikasi",C.bg,C.dim,9.5)
+testBtn.Size=UDim2.new(1,-20,0,32); testBtn.Position=UDim2.new(0,10,0,ny)
+rnd(testBtn,8); mkStroke(testBtn,C.border)
 testBtn.MouseButton1Click:Connect(function()
-	sendWebhook("Test Notifikasi", "Webhook berhasil terhubung dari Roblox.", 0xb49352)
-end)
-ny = ny + 32
+	sendWebhook("Test Notifikasi","Webhook terhubung dari NasiHub.",0xb49352)
+end); ny=ny+38
+local nInfo=mkLbl(pN,"Notif: 10 ikan, watchdog reset, admin terdeteksi.",8,Enum.Font.Gotham,C.muted)
+nInfo.Size=UDim2.new(1,-20,0,24); nInfo.Position=UDim2.new(0,10,0,ny)
+nInfo.TextWrapped=true; pN.CanvasSize=UDim2.new(0,0,0,ny+30)
 
-mkSep(nSF, ny + 2); ny = ny + 12
-local nInfo = mkLbl(nSF, "Notif dikirim saat: setiap 10 ikan tertangkap, watchdog reset, admin terdeteksi di server.", 8.5, Enum.Font.Gotham, C.muted)
-nInfo.Size = UDim2.new(1, -24, 0, 28); nInfo.Position = UDim2.new(0, 12, 0, ny)
-nInfo.TextWrapped = true; ny = ny + 32
-
-nSF.CanvasSize = UDim2.new(0, 0, 0, ny + 8)
-
-
--- ════════════════════════════════════════════════════
--- TAB 5 — LOG (Console)
--- ════════════════════════════════════════════════════
-local pL = panels["Log"]
-
-local logEnabled = false
-
--- Header
-local logHdrL = mkLbl(pL, "CONSOLE LOG", 8, Enum.Font.GothamBold, C.muted)
-logHdrL.Size = UDim2.new(1, -20, 0, 12); logHdrL.Position = UDim2.new(0, 10, 0, 10)
-mkSep(pL, 26)
-
-local logToggle = mkBtn(pL, "Log: OFF", C.card, C.muted, 9.5)
-logToggle.Size = UDim2.new(0, 68, 0, 22); logToggle.Position = UDim2.new(0, 10, 0, 32)
-mkStroke(logToggle, C.border)
-
-local logClear = mkBtn(pL, "Hapus Semua", C.card, C.muted, 9.5)
-logClear.Size = UDim2.new(0, 84, 0, 22); logClear.Position = UDim2.new(0, 84, 0, 32)
-mkStroke(logClear, C.border)
-
-mkSep(pL, 60)
-
-local logSF = Instance.new("ScrollingFrame", pL)
-logSF.Size             = UDim2.new(1, -20, 1, -68)
-logSF.Position         = UDim2.new(0, 10, 0, 66)
-logSF.BackgroundColor3 = C.card
-logSF.BorderSizePixel  = 0
-rnd(logSF, 6)
-mkStroke(logSF, C.border)
-logSF.CanvasSize          = UDim2.new(0, 0, 0, 0)
-logSF.ScrollBarThickness  = 2
-logSF.ScrollBarImageColor3= C.border
-
-local logPad = Instance.new("UIPadding", logSF)
-logPad.PaddingTop    = UDim.new(0, 5)
-logPad.PaddingLeft   = UDim.new(0, 8)
-logPad.PaddingRight  = UDim.new(0, 4)
-logPad.PaddingBottom = UDim.new(0, 5)
-
-local logLL = Instance.new("UIListLayout", logSF)
-logLL.SortOrder = Enum.SortOrder.LayoutOrder
-logLL.Padding   = UDim.new(0, 1)
-
-local logN = 0
+-- ══ TAB 5: LOG ══════════════════════════════════════
+local pL=panels["Log"]
+cTitle(pL,"CONSOLE LOG",10)
+local logEnabled=false
+local logToggle=mkBtn(pL,"Log: OFF",C.bg,C.muted,9)
+logToggle.Size=UDim2.new(0,72,0,24); logToggle.Position=UDim2.new(0,10,0,28)
+mkStroke(logToggle,C.border)
+local logClear=mkBtn(pL,"Hapus",C.bg,C.muted,9)
+logClear.Size=UDim2.new(0,56,0,24); logClear.Position=UDim2.new(0,86,0,28)
+mkStroke(logClear,C.border)
+local logSF=Instance.new("ScrollingFrame",pL)
+logSF.Size=UDim2.new(1,-20,1,-60); logSF.Position=UDim2.new(0,10,0,58)
+logSF.BackgroundColor3=C.bg; logSF.BorderSizePixel=0
+rnd(logSF,8); mkStroke(logSF,C.border)
+logSF.CanvasSize=UDim2.new(0,0,0,0); logSF.ScrollBarThickness=2
+logSF.ScrollBarImageColor3=C.border
+do
+	local lp=Instance.new("UIPadding",logSF)
+	lp.PaddingTop=UDim.new(0,5); lp.PaddingLeft=UDim.new(0,8)
+	lp.PaddingRight=UDim.new(0,4); lp.PaddingBottom=UDim.new(0,5)
+end
+local logLL=Instance.new("UIListLayout",logSF)
+logLL.SortOrder=Enum.SortOrder.LayoutOrder; logLL.Padding=UDim.new(0,1)
+local logN=0
 local function addLog(txt)
 	if not logEnabled then return end
-	logN = logN + 1
-	local row = Instance.new("TextLabel", logSF)
-	row.LayoutOrder  = logN
-	row.Size         = UDim2.new(1, 0, 0, 13)
-	row.BackgroundTransparency = 1
-	row.Text         = string.format("[%s] %s", os.date("%H:%M:%S"), tostring(txt))
-	row.TextColor3   = C.dim
-	row.Font         = Enum.Font.Gotham
-	row.TextSize     = 8.5
-	row.TextXAlignment = Enum.TextXAlignment.Left
-	row.TextWrapped  = true
+	logN=logN+1
+	local row=Instance.new("TextLabel",logSF)
+	row.LayoutOrder=logN; row.Size=UDim2.new(1,0,0,13)
+	row.BackgroundTransparency=1
+	row.Text=string.format("[%s] %s",os.date("%H:%M:%S"),tostring(txt))
+	row.TextColor3=C.dim; row.Font=Enum.Font.Gotham
+	row.TextSize=8.5; row.TextXAlignment=Enum.TextXAlignment.Left
+	row.TextWrapped=true
 	task.defer(function()
-		logSF.CanvasSize     = UDim2.new(0, 0, 0, logLL.AbsoluteContentSize.Y + 8)
-		logSF.CanvasPosition = Vector2.new(0, math.huge)
+		logSF.CanvasSize=UDim2.new(0,0,0,logLL.AbsoluteContentSize.Y+8)
+		logSF.CanvasPosition=Vector2.new(0,math.huge)
 	end)
-	local kids = {}
-	for _, k in ipairs(logSF:GetChildren()) do
-		if k:IsA("TextLabel") then kids[#kids+1] = k end
-	end
-	if #kids > 80 then kids[1]:Destroy() end
+	local kids={}
+	for _,k in ipairs(logSF:GetChildren()) do if k:IsA("TextLabel") then kids[#kids+1]=k end end
+	if #kids>80 then kids[1]:Destroy() end
 end
-
 logToggle.MouseButton1Click:Connect(function()
-	logEnabled = not logEnabled
-	logToggle.Text       = logEnabled and "Log: ON" or "Log: OFF"
-	logToggle.TextColor3 = logEnabled and C.gold or C.muted
+	logEnabled=not logEnabled
+	logToggle.Text=logEnabled and "Log: ON" or "Log: OFF"
+	logToggle.TextColor3=logEnabled and C.gold or C.muted
 end)
 logClear.MouseButton1Click:Connect(function()
-	for _, k in ipairs(logSF:GetChildren()) do
-		if k:IsA("TextLabel") then k:Destroy() end
-	end
-	logSF.CanvasSize = UDim2.new(0, 0, 0, 0); logN = 0
+	for _,k in ipairs(logSF:GetChildren()) do if k:IsA("TextLabel") then k:Destroy() end end
+	logSF.CanvasSize=UDim2.new(0,0,0,0); logN=0
 end)
 
 -- ════════════════════════════════════════════════════
