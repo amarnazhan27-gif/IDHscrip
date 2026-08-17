@@ -181,9 +181,15 @@ local function releaseAllInput()
     end
 end
 
--- ── Fishing result states ─────────────────────────────────────
+-- ── Fishing result & trace states ─────────────────────────────
 -- UNKNOWN | ACTIVE | SUCCESS_CONFIRMED | TIMEOUT | RESET
-local resultState = "UNKNOWN"
+local resultState             = "UNKNOWN"
+local lastFishingResultReason = "none"
+local lastFishingResultState  = "UNKNOWN"
+local lastFishingProgress     = 0.0
+local lastFishingGuiOpenedAt  = 0
+local lastFishingGuiClosedAt  = 0
+local lastFishingToolState    = "None"
 
 -- ── Character state management ────────────────────────────────
 local _savedWalkSpeed = nil
@@ -711,11 +717,13 @@ local function tickMinigame(now)
     -- Try to resolve bars
     local hasBars = resolveBars()
     if hasBars and _wBar and _rBar and trulyVis(_wBar) and trulyVis(_rBar) then
-        resultState = "ACTIVE"
+        resultState             = "ACTIVE"
+        lastFishingResultState  = "ACTIVE"
         _mgEverSeen = true; _mgLastSeen = now
 
         if not _mgStarted then
             _mgStarted = true; setSpace(false, true)
+            lastFishingGuiOpenedAt = now
         end
 
         local wC = _wBar.AbsolutePosition.X + _wBar.AbsoluteSize.X * 0.5
@@ -749,7 +757,10 @@ local function tickMinigame(now)
             if gone >= CFG.fishing.minigameGuard then
                 releaseAllInput()
                 -- bar-gone → UNKNOWN (NOT counted as success)
-                resultState  = "UNKNOWN"
+                lastFishingGuiClosedAt  = now
+                resultState             = "UNKNOWN"
+                lastFishingResultState  = "UNKNOWN"
+                lastFishingResultReason = "bar-gone"
                 fishUnknown  = fishUnknown + 1
                 fishAttempts = fishAttempts + 1
 
@@ -795,21 +806,42 @@ local hbConn = RS.Heartbeat:Connect(function(dt)
         if fishState == STATES.REELING then
             tickMinigame(now)
         elseif fishState == STATES.WAITING_BITE then
-            local el = now - _biteAt
-            setPhaseBar(0.25 + math.clamp(el / CFG.fishing.biteTimeout, 0, 1) * 0.25)
-            stateL.Text = string.format("Waiting... %.0fs", math.max(0, CFG.fishing.biteTimeout - el))
-            if el >= CFG.fishing.biteTimeout then
-                fishState   = STATES.REELING
-                _mgAt       = now
-                _mgEverSeen = false
-                _mgStarted  = false
-                _mgLastSeen = 0
-                resultState = "UNKNOWN"
-                _wBar = nil; _rBar = nil; _lastScan = 0
+            -- Continuously check if Reeling GUI becomes visible
+            local hasBars = resolveBars()
+            if hasBars and _wBar and _rBar and trulyVis(_wBar) and trulyVis(_rBar) then
+                fishState               = STATES.REELING
+                _mgAt                   = now
+                _mgEverSeen             = true
+                _mgStarted              = false
+                _mgLastSeen             = now
+                lastFishingGuiOpenedAt  = now
+                resultState             = "ACTIVE"
+                lastFishingResultState  = "ACTIVE"
+                lastFishingResultReason = "gui-opened"
                 releaseAllInput()
                 setPhaseBar(0.5)
                 stateL.Text = "Reeling..."
                 setDot(C.accent)
+                return
+            end
+
+            local el = now - _biteAt
+            setPhaseBar(0.25 + math.clamp(el / CFG.fishing.biteTimeout, 0, 1) * 0.25)
+            stateL.Text = string.format("Waiting... %.0fs", math.max(0, CFG.fishing.biteTimeout - el))
+
+            if el >= CFG.fishing.biteTimeout then
+                -- Bite timeout expired WITHOUT Reeling GUI!
+                releaseAllInput()
+                resultState             = "TIMEOUT"
+                lastFishingResultState  = "TIMEOUT"
+                lastFishingResultReason = "bite-timeout-no-gui"
+                fishFailed              = fishFailed + 1
+                fishAttempts            = fishAttempts + 1
+                cntL.Text = string.format("Confirmed: %d | Attempts: %d | Unknown: %d",
+                    fishConfirmed, fishAttempts, fishUnknown)
+                stateL.Text = "Bite Timeout"
+                setDot(C.dim)
+                doReset("bite-timeout-no-gui")
             end
         end
     end, function(e) return e end)
@@ -832,11 +864,13 @@ task.spawn(function()
 
             local tool = equipBestRod()
             if not tool then
+                lastFishingToolState = "None"
                 stateL.Text = "No rod found"
                 setDot(C.dim)
                 return
             end
 
+            lastFishingToolState = "Equipped (" .. tool.Name .. ")"
             rodL.Text = string.format("Rod: %s (src: %s)", _currentRod.name, _currentRod.source)
             setJumpEnabled(false)
 

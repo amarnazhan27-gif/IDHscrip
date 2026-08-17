@@ -61,6 +61,7 @@ local TS          = game:GetService("TweenService")
 local HTTP        = game:GetService("HttpService")
 local CS          = game:GetService("CollectionService")
 local me          = Players.LocalPlayer
+local PlayerController = nil
 
 ---------------------------------------------------------------------------
 -- 2. CAPABILITIES – executor feature detection
@@ -100,14 +101,15 @@ local CFG = {
         fatigueDur     = 8,
     },
     mining = {
-        scanInterval   = 1.5,    -- seconds between full workspace scans
-        stopDistance   = 2.5,
-        moveTimeout    = 20,
-        hitInterval    = 0.28,   -- MIN_HIT_INTERVAL between activations
-        maxHitCycles   = 8,      -- swing cycles before giving up on target
-        maxFailCount   = 4,
-        targetMaxDist  = 300,
-        scoreThreshold = 5,
+        scanInterval      = 1.5,    -- seconds between full workspace scans
+        stopDistance      = 2.5,
+        moveTimeout       = 20,
+        hitInterval       = 0.28,   -- MIN_HIT_INTERVAL between activations
+        maxHitCycles      = 8,      -- swing cycles before giving up on target
+        maxFailCount      = 4,
+        maxPathRecomputes = 3,      -- max recomputes on Path.Blocked
+        targetMaxDist     = 300,
+        scoreThreshold    = 5,
     },
     performance = {
         smooth = 0.08,           -- EMA weight for frame-time rolling avg
@@ -190,8 +192,13 @@ do
     end
 
     function RuntimeController.cleanup()
-        RuntimeController.alive      = false
+        RuntimeController.alive       = false
         RuntimeController.currentMode = "OFF"
+
+        -- Stop spectating and restore camera subject if active
+        if PlayerController and type(PlayerController.stopSpectate) == "function" then
+            pcall(function() PlayerController.stopSpectate() end)
+        end
 
         -- Disconnect all tracked connections
         for _, conn in ipairs(RuntimeController.connections) do
@@ -765,15 +772,36 @@ end
 local FishingResultObserver = {}
 do
     local state = "UNKNOWN"
-    local _callbacks = {}
+    local lastReason = "none"
+    local lastProgress = 0.0
+    local lastGuiOpenedAt = 0
+    local lastGuiClosedAt = 0
+    local lastToolState = "None"
 
     function FishingResultObserver.setState(s)
         state = s
     end
     function FishingResultObserver.getState() return state end
 
+    function FishingResultObserver.setToolState(ts)
+        lastToolState = tostring(ts or "None")
+    end
+
+    function FishingResultObserver.getTrace()
+        return {
+            lastFishingResultReason = lastReason,
+            lastFishingResultState  = state,
+            lastFishingProgress     = lastProgress,
+            lastFishingGuiOpenedAt  = lastGuiOpenedAt,
+            lastFishingGuiClosedAt  = lastGuiClosedAt,
+            lastFishingToolState    = lastToolState,
+        }
+    end
+
     function FishingResultObserver.observeStart()
         state = "ACTIVE"
+        lastReason = "gui-opened"
+        lastGuiOpenedAt = os.clock()
         LOG("FISH_OBS", "observeStart → ACTIVE")
     end
 
@@ -783,26 +811,33 @@ do
     end
 
     function FishingResultObserver.observeProgress(pct)
-        -- called with ProgressBar pct; full progress is a strong positive signal
-        if pct ~= nil and pct >= 0.98 then
-            -- High progress is a candidate signal for success, but NOT authoritative alone
-            LOG("FISH_OBS", string.format("High progress: %.2f – marking ACTIVE", pct))
+        if pct ~= nil then
+            lastProgress = pct
+            if pct >= 0.98 then
+                LOG("FISH_OBS", string.format("High progress: %.2f – marking ACTIVE", pct))
+            end
         end
     end
 
     function FishingResultObserver.observeEnd(reason)
+        lastReason = tostring(reason or "unknown")
         -- "bar-gone" alone → UNKNOWN, not success
         if reason == "bar-gone" or reason == "gui-hidden" then
+            lastGuiClosedAt = os.clock()
             if state == "ACTIVE" then
                 state = "UNKNOWN"
                 LOG("FISH_OBS", "observeEnd(bar-gone) → UNKNOWN (not counted)")
             end
-        elseif reason == "timeout" then
+        elseif reason == "timeout" or reason == "bite-timeout-no-gui" then
             state = "TIMEOUT"
-            LOG("FISH_OBS", "observeEnd(timeout) → TIMEOUT")
-        elseif reason == "tool-deactivate" or reason == "explicit-catch" then
+            LOG("FISH_OBS", "observeEnd(" .. reason .. ") → TIMEOUT")
+        elseif reason == "tool-deactivate" then
+            state = "UNKNOWN"
+            LOG("FISH_OBS", "observeEnd(tool-deactivate) → UNKNOWN (unconfirmed)")
+        elseif reason == "explicit-catch" then
+            -- ONLY if genuinely confirmed client evidence exists (currently unconfirmed)
             state = "SUCCESS_CONFIRMED"
-            LOG("FISH_OBS", "observeEnd(" .. reason .. ") → SUCCESS_CONFIRMED")
+            LOG("FISH_OBS", "observeEnd(explicit-catch) → SUCCESS_CONFIRMED")
         elseif reason == "reset" then
             state = "RESET"
         else
@@ -813,6 +848,7 @@ do
 
     function FishingResultObserver.reset()
         state = "UNKNOWN"
+        lastReason = "reset"
     end
 end
 
@@ -1036,12 +1072,14 @@ do
 
             local tool = FishingToolResolver.equipBest()
             if not tool then
+                FishingResultObserver.setToolState("None")
                 WARN("FISH", "No rod – cannot cast")
                 _casting = false
                 setState(STATES.IDLE)
                 return
             end
 
+            FishingResultObserver.setToolState("Equipped (" .. tool.Name .. ")")
             CharacterState.setJumpEnabled(false)
 
             local cam = workspace.CurrentCamera
@@ -1099,17 +1137,28 @@ do
         end
 
         if _state == STATES.WAITING_BITE then
+            -- Continuously check if Reeling GUI becomes visible
+            local hasBars = FishingUIAdapter.resolveFishingGui()
+            if hasBars and FishingUIAdapter.isReelingVisible() then
+                _state       = STATES.REELING
+                _mgAt        = now
+                _mgEverSeen  = true
+                _mgStarted   = false
+                _mgLastSeen  = now
+                FishingInputManager.setSpaceHeld(false, true)
+                FishingResultObserver.observeStart()
+                LOG("FISH", "Reeling GUI detected → REELING")
+                return
+            end
+
             local el = now - _biteAt
             if el >= CFG.fishing.biteTimeout then
-                -- Auto-transition to minigame phase (assumed bite occurred)
-                _state    = STATES.REELING
-                _mgAt     = now
-                _mgEverSeen  = false
-                _mgStarted   = false
-                _mgLastSeen  = 0
-                FishingInputManager.setSpaceHeld(false, true)
-                FishingUIAdapter.invalidate()
-                LOG("FISH", "Bite timeout → REELING")
+                -- Bite timeout expired WITHOUT Reeling GUI appearing!
+                FishingInputManager.releaseAll()
+                FishingResultObserver.observeEnd("bite-timeout-no-gui")
+                RuntimeController.sessionCounters.fishFailed = RuntimeController.sessionCounters.fishFailed + 1
+                LOG("FISH", "Bite timeout without Reeling GUI → reset/recast")
+                FishingController.reset("bite-timeout-no-gui")
             end
             return
         end
@@ -1186,11 +1235,45 @@ local CRYS_NO_BLACKLIST = {
     "house","building","room","ground","terrain","base",
 }
 
+local function getTargetPosition(target)
+    if not target then return nil end
+    if target:IsA("Model") then
+        if target.PrimaryPart then
+            return target.PrimaryPart.Position
+        end
+        local ok, pivot = pcall(function() return target:GetPivot().Position end)
+        if ok and pivot then return pivot end
+        for _, c in ipairs(target:GetChildren()) do
+            if c:IsA("BasePart") then return c.Position end
+        end
+        return nil
+    elseif target:IsA("BasePart") then
+        return target.Position
+    end
+    return nil
+end
+
+local function getTargetSize(target)
+    if not target then return Vector3.new(1, 1, 1) end
+    if target:IsA("Model") then
+        local ok, _, sz = pcall(function() return target:GetBoundingBox() end)
+        if ok and sz then return sz end
+        if target.PrimaryPart then return target.PrimaryPart.Size end
+        for _, c in ipairs(target:GetChildren()) do
+            if c:IsA("BasePart") then return c.Size end
+        end
+        return Vector3.new(4, 4, 4)
+    elseif target:IsA("BasePart") then
+        return target.Size
+    end
+    return Vector3.new(1, 1, 1)
+end
+
 local MiningTargetResolver = {}
 local MiningTargetValidator = {}
 do
     -------------------------------------------------------------------
-    -- VALIDATOR
+    -- VALIDATOR (supports BasePart, MeshPart, and Model)
     -------------------------------------------------------------------
     function MiningTargetValidator.isValid(inst)
         if not inst then return false end
@@ -1200,16 +1283,31 @@ do
         local ok, _ = pcall(function() return inst.Parent end)
         if not ok then return false end
 
-        -- Must be a geometric object
-        if not (inst:IsA("BasePart") or inst:IsA("MeshPart")) then return false end
+        -- Must be a geometric object (BasePart or Model)
+        if not (inst:IsA("BasePart") or inst:IsA("MeshPart") or inst:IsA("Model")) then
+            return false
+        end
 
-        -- Must have a position
-        local posOk = pcall(function() return inst.Position end)
-        if not posOk then return false end
+        -- If Model, must have at least one BasePart descendant
+        if inst:IsA("Model") then
+            local hasPart = false
+            for _, desc in ipairs(inst:GetDescendants()) do
+                if desc:IsA("BasePart") then hasPart = true; break end
+            end
+            if not hasPart then return false end
+        end
 
-        -- Must not be a player character part
+        -- Must have a valid position
+        local pos = getTargetPosition(inst)
+        if not pos then return false end
+
+        -- Must not be a player character part/model
         for _, p in ipairs(Players:GetPlayers()) do
-            if p.Character and inst:IsDescendantOf(p.Character) then return false end
+            if p.Character then
+                if inst == p.Character or inst:IsDescendantOf(p.Character) then
+                    return false
+                end
+            end
         end
 
         -- Must not be terrain
@@ -1280,11 +1378,21 @@ do
             end
         end
 
-        -- Priority 4: Object structure semantics (Neon material is strongly emissive)
-        if inst.Material == Enum.Material.Neon then score = score + 4 end
-        if inst:IsA("MeshPart") then score = score + 2 end
-        if inst.Transparency < 0.85 then score = score + 1 end
-        if inst.CanCollide then score = score + 1 end
+        -- Priority 4: Object structure semantics (Neon material / Model structure)
+        if inst:IsA("Model") then
+            score = score + 3
+            for _, c in ipairs(inst:GetChildren()) do
+                if c:IsA("BasePart") and c.Material == Enum.Material.Neon then
+                    score = score + 4
+                    break
+                end
+            end
+        else
+            if inst.Material == Enum.Material.Neon then score = score + 4 end
+            if inst:IsA("MeshPart") then score = score + 2 end
+            if inst.Transparency < 0.85 then score = score + 1 end
+            if inst.CanCollide then score = score + 1 end
+        end
 
         -- Priority 5: Name heuristic (CRYS_OK – fallback, low confidence)
         local ln = inst.Name:lower()
@@ -1299,7 +1407,7 @@ do
         score = score + nameScore
 
         -- Size penalties
-        local sz = inst.Size
+        local sz = getTargetSize(inst)
         if sz.X > 22 or sz.Y > 22 or sz.Z > 22 then score = score - 6 end
         if sz.X < 0.35 and sz.Y < 0.35 and sz.Z < 0.35 then score = score - 5 end
 
@@ -1315,11 +1423,31 @@ do
     function MiningTargetResolver.refreshCache()
         _cache  = {}
         _cacheAt = os.clock()
-        local threshold = CFG.mining.scoreThreshold
+        local threshold  = CFG.mining.scoreThreshold
+        local seenModels = {}
+
         for _, obj in ipairs(workspace:GetDescendants()) do
-            local sc, _ = MiningTargetResolver.scoreTarget(obj)
-            if sc >= threshold then
-                _cache[#_cache + 1] = obj
+            -- Normalize candidate to parent Model if part is in a valid Model
+            local candidate = obj
+            if obj:IsA("BasePart") and obj.Parent and obj.Parent:IsA("Model") and obj.Parent ~= workspace then
+                if MiningTargetValidator.isValid(obj.Parent) then
+                    candidate = obj.Parent
+                end
+            end
+
+            if candidate:IsA("Model") then
+                if not seenModels[candidate] then
+                    seenModels[candidate] = true
+                    local sc, _ = MiningTargetResolver.scoreTarget(candidate)
+                    if sc >= threshold then
+                        _cache[#_cache + 1] = candidate
+                    end
+                end
+            elseif candidate:IsA("BasePart") then
+                local sc, _ = MiningTargetResolver.scoreTarget(candidate)
+                if sc >= threshold then
+                    _cache[#_cache + 1] = candidate
+                end
             end
         end
         LOG("MINE", "Cache refreshed: " .. #_cache .. " candidates")
@@ -1343,15 +1471,18 @@ do
             if MiningTargetValidator.isValid(obj) then
                 local sc, reason = MiningTargetResolver.scoreTarget(obj)
                 if sc >= threshold then
-                    local dist = (obj.Position - myPos).Magnitude
-                    if dist <= maxDist then
-                        -- Combine distance and score
-                        local combined = sc - (dist / 50)
-                        if combined > bestScore then
-                            bestScore = combined
-                            best      = obj
-                            bestDist  = dist
-                            bestReason = reason
+                    local objPos = getTargetPosition(obj)
+                    if objPos then
+                        local dist = (objPos - myPos).Magnitude
+                        if dist <= maxDist then
+                            -- Combine distance and score
+                            local combined = sc - (dist / 50)
+                            if combined > bestScore then
+                                bestScore  = combined
+                                best       = obj
+                                bestDist   = dist
+                                bestReason = reason
+                            end
                         end
                     end
                 end
@@ -1455,10 +1586,12 @@ do
         return workspace:Raycast(pos + Vector3.new(0, 16, 0), Vector3.new(0, -56, 0), rp)
     end
 
-    -- Compute a stand position near target
+    -- Compute a stand position near target (Model or BasePart)
     function MiningMovement.getStandPoint(target, myPos)
-        local origin = target.Position
-        local cw = math.max(target.Size.X, target.Size.Z)
+        local origin = getTargetPosition(target)
+        if not origin then return nil end
+        local tSize = getTargetSize(target)
+        local cw = math.max(tSize.X, tSize.Z)
         local radius = math.clamp(cw * 0.28 + 1.3, CFG.mining.stopDistance, 3.8)
         local ignore = { me.Character, target }
         local best, bestSc = nil, math.huge
@@ -1469,7 +1602,7 @@ do
             local gr  = groundRay(smp, ignore)
             if gr and gr.Instance and gr.Normal.Y > 0.45 then
                 local pos = gr.Position + Vector3.new(0, 3.1, 0)
-                if pos.Y <= origin.Y + target.Size.Y * 0.5 then
+                if pos.Y <= origin.Y + tSize.Y * 0.5 then
                     local hd = math.abs(pos.Y - myPos.Y)
                     if hd < 14 then
                         local dc = (Vector3.new(pos.X, origin.Y, pos.Z) - origin).Magnitude
@@ -1490,8 +1623,8 @@ do
     end
 
     --[[
-        Move to targetPos using Pathfinding, falling back to direct MoveTo.
-        Saves and restores exact original WalkSpeed.
+        Move to targetPos using Pathfinding with Path.Blocked handling and fallback MoveTo.
+        Saves and restores exact original WalkSpeed in finally-style cleanup.
         Returns: "arrived" | "mode-changed" | "target-gone" | "timeout" | "failed"
     ]]
     function MiningMovement.moveTo(hum, targetPos, targetPart, miningGeneration)
@@ -1500,124 +1633,177 @@ do
 
         -- Save exact WalkSpeed
         local origWalkSpeed = hum.WalkSpeed
-        local MOVE_SPEED    = math.max(origWalkSpeed, 20)   -- use at least normal walk speed
+        local MOVE_SPEED    = math.max(origWalkSpeed, 20)
+        local result        = "failed"
+        local recomputes    = 0
+        local maxRecomputes = CFG.mining.maxPathRecomputes or 3
+        local blockedConn   = nil
 
-        local result = "failed"
+        local function cleanup()
+            if blockedConn then
+                pcall(function() blockedConn:Disconnect() end)
+                blockedConn = nil
+            end
+            pcall(function() hum.WalkSpeed = origWalkSpeed end)
+        end
 
         pcall(function()
-            -- Try PathfindingService
-            local path = PFS:CreatePath({
-                AgentRadius    = 1.8,
-                AgentHeight    = 5.0,
-                AgentCanJump   = true,
-                AgentCanClimb  = false,
-                WaypointSpacing= 6,
-                Costs          = { Water = 8 },
-            })
-
-            local pathOk = pcall(function() path:ComputeAsync(ch.PrimaryPart.Position, targetPos) end)
-            local wps
-
-            if pathOk and path.Status == Enum.PathStatus.Success then
-                wps = path:GetWaypoints()
-            else
-                -- Fallback: single direct MoveTo waypoint
-                WARN("MINE", "Pathfinding failed – using direct MoveTo fallback")
-                wps = {{ Position = targetPos, Action = Enum.PathWaypointAction.Walk }}
-            end
-
+            local t0_total = os.clock()
             hum.WalkSpeed = MOVE_SPEED
 
-            local lastPos = ch.PrimaryPart.Position
-            local stuckT  = 0
-            local arrived = false
-
-            local t0_total = os.clock()
-
-            for i, wp in ipairs(wps) do
-                -- Check termination conditions
-                if RuntimeController.currentMode ~= "MINE" or not RuntimeController.alive then
-                    result = "mode-changed"; return
+            local function computeAndGetWaypoints(startPos)
+                local path = PFS:CreatePath({
+                    AgentRadius     = 1.8,
+                    AgentHeight     = 5.0,
+                    AgentCanJump    = true,
+                    AgentCanClimb   = false,
+                    WaypointSpacing = 6,
+                    Costs           = { Water = 8 },
+                })
+                local ok = pcall(function() path:ComputeAsync(startPos, targetPos) end)
+                if ok and path.Status == Enum.PathStatus.Success then
+                    return path, path:GetWaypoints()
                 end
-                if miningGeneration ~= RuntimeController.getGeneration("mine_ctrl") then
-                    result = "mode-changed"; return
-                end
-                if targetPart and not targetPart.Parent then
-                    result = "target-gone"; return
-                end
-                if os.clock() - t0_total > CFG.mining.moveTimeout then
-                    result = "timeout"; return
-                end
-
-                if wp.Action == Enum.PathWaypointAction.Jump then doJump(hum) end
-
-                hum:MoveTo(wp.Position)
-                local t0 = os.clock()
-
-                while RuntimeController.currentMode == "MINE" and RuntimeController.alive do
-                    task.wait(0.06)
-                    if not ch.PrimaryPart then break end
-
-                    -- Check mining gen (mode switch during path)
-                    if miningGeneration ~= RuntimeController.getGeneration("mine_ctrl") then
-                        result = "mode-changed"; return
-                    end
-                    if targetPart and not targetPart.Parent then
-                        result = "target-gone"; return
-                    end
-                    if os.clock() - t0_total > CFG.mining.moveTimeout then
-                        result = "timeout"; return
-                    end
-
-                    local cur = ch.PrimaryPart.Position
-
-                    -- Check if close enough to target
-                    if targetPart and targetPart.Parent then
-                        local cw   = math.max(targetPart.Size.X, targetPart.Size.Z)
-                        local dist = (cur - targetPart.Position).Magnitude
-                        if dist <= (cw * 0.5 + CFG.mining.stopDistance + 0.3) then
-                            arrived = true; break
-                        end
-                    end
-
-                    if (cur - targetPos).Magnitude <= 1.2 then arrived = true; break end
-
-                    local reach = (i < #wps) and 5.0 or 1.2
-                    if (cur - wp.Position).Magnitude <= reach then break end
-
-                    if os.clock() - t0 > 5.5 then break end
-
-                    -- Stuck detection
-                    if (cur - lastPos).Magnitude < 0.17 then
-                        stuckT = stuckT + 0.06
-                        if stuckT > 1.2 then
-                            doJump(hum)
-                            local dir = targetPos - cur
-                            hum:MoveTo(cur + (dir.Magnitude > 0.1 and dir.Unit or Vector3.new(1, 0, 0)) * 4.5)
-                            task.wait(0.3)
-                            stuckT = 0
-                            break
-                        end
-                    else
-                        stuckT  = 0
-                        lastPos = cur
-                    end
-                end
-
-                if arrived then break end
+                return nil, { { Position = targetPos, Action = Enum.PathWaypointAction.Walk } }
             end
 
-            if arrived then
-                result = "arrived"
-            elseif ch.PrimaryPart and (ch.PrimaryPart.Position - targetPos).Magnitude <= 2.5 then
-                result = "arrived"
-            else
-                result = "failed"
+            while recomputes <= maxRecomputes do
+                if RuntimeController.currentMode ~= "MINE" or not RuntimeController.alive then
+                    result = "mode-changed"; break
+                end
+                if miningGeneration ~= RuntimeController.getGeneration("mine_ctrl") then
+                    result = "mode-changed"; break
+                end
+                if targetPart and not targetPart.Parent then
+                    result = "target-gone"; break
+                end
+                if os.clock() - t0_total > CFG.mining.moveTimeout then
+                    result = "timeout"; break
+                end
+
+                if not ch.PrimaryPart then break end
+                local curPos = ch.PrimaryPart.Position
+                local pathObj, wps = computeAndGetWaypoints(curPos)
+
+                local pathNeedsRecompute = false
+                local currentWpIndex     = 1
+
+                if blockedConn then
+                    pcall(function() blockedConn:Disconnect() end)
+                    blockedConn = nil
+                end
+
+                if pathObj then
+                    blockedConn = pathObj.Blocked:Connect(function(blockedWaypointIndex)
+                        if blockedWaypointIndex >= currentWpIndex then
+                            pathNeedsRecompute = true
+                        end
+                    end)
+                end
+
+                local lastPos = ch.PrimaryPart.Position
+                local stuckT  = 0
+                local isArr   = false
+
+                for i, wp in ipairs(wps) do
+                    currentWpIndex = i
+                    if RuntimeController.currentMode ~= "MINE" or not RuntimeController.alive then
+                        result = "mode-changed"; isArr = false; break
+                    end
+                    if miningGeneration ~= RuntimeController.getGeneration("mine_ctrl") then
+                        result = "mode-changed"; isArr = false; break
+                    end
+                    if targetPart and not targetPart.Parent then
+                        result = "target-gone"; isArr = false; break
+                    end
+                    if os.clock() - t0_total > CFG.mining.moveTimeout then
+                        result = "timeout"; isArr = false; break
+                    end
+                    if pathNeedsRecompute then
+                        break
+                    end
+
+                    if wp.Action == Enum.PathWaypointAction.Jump then doJump(hum) end
+
+                    hum:MoveTo(wp.Position)
+                    local t0 = os.clock()
+
+                    while RuntimeController.currentMode == "MINE" and RuntimeController.alive do
+                        task.wait(0.06)
+                        if not ch.PrimaryPart then break end
+
+                        if miningGeneration ~= RuntimeController.getGeneration("mine_ctrl") then
+                            result = "mode-changed"; isArr = false; break
+                        end
+                        if targetPart and not targetPart.Parent then
+                            result = "target-gone"; isArr = false; break
+                        end
+                        if os.clock() - t0_total > CFG.mining.moveTimeout then
+                            result = "timeout"; isArr = false; break
+                        end
+                        if pathNeedsRecompute then
+                            break
+                        end
+
+                        local cur = ch.PrimaryPart.Position
+
+                        if targetPart and targetPart.Parent then
+                            local tPos = getTargetPosition(targetPart)
+                            local tSz  = getTargetSize(targetPart)
+                            if tPos then
+                                local cw   = math.max(tSz.X, tSz.Z)
+                                local dist = (cur - tPos).Magnitude
+                                if dist <= (cw * 0.5 + CFG.mining.stopDistance + 0.3) then
+                                    isArr = true; break
+                                end
+                            end
+                        end
+
+                        if (cur - targetPos).Magnitude <= 1.2 then isArr = true; break end
+
+                        local reach = (i < #wps) and 5.0 or 1.2
+                        if (cur - wp.Position).Magnitude <= reach then break end
+
+                        if os.clock() - t0 > 5.5 then break end
+
+                        if (cur - lastPos).Magnitude < 0.17 then
+                            stuckT = stuckT + 0.06
+                            if stuckT > 1.2 then
+                                doJump(hum)
+                                local dir = targetPos - cur
+                                hum:MoveTo(cur + (dir.Magnitude > 0.1 and dir.Unit or Vector3.new(1, 0, 0)) * 4.5)
+                                task.wait(0.3)
+                                stuckT = 0
+                                break
+                            end
+                        else
+                            stuckT  = 0
+                            lastPos = cur
+                        end
+                    end
+
+                    if isArr or pathNeedsRecompute or result == "mode-changed" or result == "target-gone" or result == "timeout" then
+                        break
+                    end
+                end
+
+                if isArr then
+                    result = "arrived"
+                    break
+                elseif pathNeedsRecompute then
+                    recomputes = recomputes + 1
+                    WARN("MINE", string.format("Path.Blocked encountered – recomputing (%d/%d)", recomputes, maxRecomputes))
+                    task.wait(0.1)
+                else
+                    if ch.PrimaryPart and (ch.PrimaryPart.Position - targetPos).Magnitude <= 2.5 then
+                        result = "arrived"
+                    end
+                    break
+                end
             end
         end)
 
-        -- ALWAYS restore exact original WalkSpeed
-        pcall(function() hum.WalkSpeed = origWalkSpeed end)
+        cleanup()
         return result
     end
 end
@@ -1709,10 +1895,13 @@ do
     end
 
     function MiningController.isOccupied(target)
+        local targetPos = getTargetPosition(target)
+        if not targetPos then return false end
+
         for _, p in ipairs(Players:GetPlayers()) do
             if p ~= me and p.Character then
                 local root = p.Character.PrimaryPart
-                if root and (root.Position - target.Position).Magnitude < 10 then
+                if root and (root.Position - targetPos).Magnitude < 10 then
                     local t = p.Character:FindFirstChildOfClass("Tool")
                     if t then
                         local tn = t.Name:lower()
@@ -1747,7 +1936,7 @@ do
                     if not myPos then task.wait(0.5); return end
 
                     -- Respect lock: keep current target while mining
-                    if _locked and _currentTarget and _currentTarget.Parent then
+                    if _locked and _currentTarget and _currentTarget.Parent and MiningTargetValidator.isValid(_currentTarget) then
                         -- Continue mining below
                     else
                         -- Scan for target
@@ -1771,12 +1960,18 @@ do
                         _failCount     = 0
                         _hitCycles     = 0
                         setState(STATES.TARGET_SELECTED)
-                        LOG("MINE", string.format("Target: %s | score=%.1f dist=%.1f reason=%s",
-                            target.Name, score, dist, reason))
+                        LOG("MINE", string.format("Target: %s (%s) | score=%.1f dist=%.1f reason=%s",
+                            target.Name, target.ClassName, score, dist, reason))
                     end
 
                     local crystal = _currentTarget
                     if not MiningTargetValidator.isValid(crystal) then
+                        _currentTarget = nil; _locked = false; return
+                    end
+
+                    local tPos = getTargetPosition(crystal)
+                    local tSz  = getTargetSize(crystal)
+                    if not tPos then
                         _currentTarget = nil; _locked = false; return
                     end
 
@@ -1791,8 +1986,8 @@ do
                     end
 
                     -- Check distance
-                    local cw   = math.max(crystal.Size.X, crystal.Size.Z)
-                    local dist = (myPos - crystal.Position).Magnitude
+                    local cw   = math.max(tSz.X, tSz.Z)
+                    local dist = (myPos - tPos).Magnitude
                     local closeEnough = dist <= (cw * 0.5 + CFG.mining.stopDistance + 0.5)
 
                     if not closeEnough then
@@ -1818,9 +2013,10 @@ do
                     -- Nudge toward crystal
                     local ch2 = me.Character
                     if ch2 and ch2.PrimaryPart and crystal.Parent then
-                        local cur  = ch2.PrimaryPart.Position
-                        local diff = crystal.Position - cur
-                        local flat = Vector3.new(diff.X, 0, diff.Z)
+                        local cur     = ch2.PrimaryPart.Position
+                        local curTPos = getTargetPosition(crystal) or tPos
+                        local diff    = curTPos - cur
+                        local flat    = Vector3.new(diff.X, 0, diff.Z)
                         if flat.Magnitude > 0.3 then
                             local nudge = math.clamp(cw * 0.22, 0.35, 1.0)
                             hum:MoveTo(cur + flat.Unit * nudge)
@@ -1830,10 +2026,11 @@ do
 
                     -- Face crystal
                     if me.Character and me.Character.PrimaryPart and crystal.Parent then
-                        local p = me.Character.PrimaryPart.Position
+                        local p       = me.Character.PrimaryPart.Position
+                        local curTPos = getTargetPosition(crystal) or tPos
                         pcall(function()
                             me.Character:SetPrimaryPartCFrame(
-                                CFrame.lookAt(p, Vector3.new(crystal.Position.X, p.Y, crystal.Position.Z))
+                                CFrame.lookAt(p, Vector3.new(curTPos.X, p.Y, curTPos.Z))
                             )
                         end)
                     end
@@ -1841,14 +2038,16 @@ do
                     -- MINING loop
                     setState(STATES.MINING)
                     _locked = true
-                    local aimPos = crystal.Position + Vector3.new(0, math.clamp(crystal.Size.Y * 0.1, 0.25, 2.2), 0)
+                    local curTPos = getTargetPosition(crystal) or tPos
+                    local curTSz  = getTargetSize(crystal) or tSz
+                    local aimPos  = curTPos + Vector3.new(0, math.clamp(curTSz.Y * 0.1, 0.25, 2.2), 0)
 
                     RuntimeController.sessionCounters.mineAttempts = RuntimeController.sessionCounters.mineAttempts + 1
 
                     for s = 1, 10 do
                         if gen ~= RuntimeController.getGeneration("mine_ctrl") then break end
                         if RuntimeController.currentMode ~= "MINE" then break end
-                        if not crystal.Parent then break end
+                        if not crystal.Parent or not MiningTargetValidator.isValid(crystal) then break end
 
                         MiningActionAdapter.tryActivate(tool, aimPos)
                         task.wait(CFG.mining.hitInterval + 0.05)
@@ -1857,11 +2056,11 @@ do
                     _locked = false
                     _hitCycles = _hitCycles + 1
 
-                    -- VERIFYING – only count if target actually disappeared
+                    -- VERIFYING – only count if target actually disappeared / depleted
                     setState(STATES.VERIFYING)
                     task.wait(0.15)
 
-                    if not crystal.Parent then
+                    if not crystal.Parent or not MiningTargetValidator.isValid(crystal) then
                         -- TARGET LEGITIMATELY GONE = CONFIRMED MINE
                         RuntimeController.sessionCounters.mineConfirmed = RuntimeController.sessionCounters.mineConfirmed + 1
                         if _onCountChange then
@@ -1911,6 +2110,7 @@ do
     local _status        = "Ready"
     local _onStatus      = nil
     local _targetPlayer  = nil
+    local _avatarGen     = 0
 
     function AvatarController.onStatus(fn) _onStatus = fn end
 
@@ -1925,6 +2125,23 @@ do
     local function getLocalHumanoid()
         local ch = me.Character
         return ch and ch:FindFirstChildOfClass("Humanoid")
+    end
+
+    local function applyHumanoidDescription(humanoid, desc)
+        if not humanoid or not desc then return false, "invalid arguments" end
+        local ok, err
+        local hasAsync = false
+        pcall(function()
+            if type(humanoid.ApplyDescriptionAsync) == "function" or humanoid.ApplyDescriptionAsync ~= nil then
+                hasAsync = true
+            end
+        end)
+        if hasAsync then
+            ok, err = pcall(function() humanoid:ApplyDescriptionAsync(desc) end)
+            if ok then return true end
+        end
+        ok, err = pcall(function() humanoid:ApplyDescription(desc) end)
+        return ok, err
     end
 
     -- Save original description once
@@ -1958,6 +2175,8 @@ do
         if not target then setStatus("Target unavailable"); return end
         if not target.Parent then setStatus("Target unavailable"); return end
 
+        _avatarGen = _avatarGen + 1
+        local curGen = _avatarGen
         setStatus("Applying...")
 
         task.spawn(function()
@@ -1975,18 +2194,23 @@ do
                     setStatus("Failed"); return
                 end
 
+                if curGen ~= _avatarGen then
+                    LOG("AVATAR", "copyAvatar cancelled due to generation change")
+                    return
+                end
+
                 local cloned = desc:Clone()
                 local lHum   = getLocalHumanoid()
                 if not lHum then setStatus("Failed"); return end
 
-                local applyOk, applyErr = pcall(function()
-                    lHum:ApplyDescription(cloned)
-                end)
+                local applyOk, applyErr = applyHumanoidDescription(lHum, cloned)
+                if curGen ~= _avatarGen then return end
+
                 if applyOk then
                     setStatus("Copied from @" .. target.Name)
                 else
                     setStatus("Failed")
-                    WARN("AVATAR", "ApplyDescription failed: " .. tostring(applyErr))
+                    WARN("AVATAR", "applyHumanoidDescription failed: " .. tostring(applyErr))
                 end
             end, function(e) return debug and debug.traceback and debug.traceback(e) or e end)
 
@@ -2005,11 +2229,14 @@ do
         local hum = getLocalHumanoid()
         if not hum then setStatus("Failed"); return end
 
+        _avatarGen = _avatarGen + 1
+        local curGen = _avatarGen
         setStatus("Restoring...")
+
         task.spawn(function()
-            local ok, err = pcall(function()
-                hum:ApplyDescription(_originalDesc:Clone())
-            end)
+            local ok, err = applyHumanoidDescription(hum, _originalDesc:Clone())
+            if curGen ~= _avatarGen then return end
+
             if ok then
                 setStatus("Restored")
             else
@@ -2019,10 +2246,10 @@ do
         end)
     end
 
-    -- Handle respawn: update humanoid reference is implicit (we always fetch fresh)
+    -- Handle respawn: update humanoid reference and bump generation
     RuntimeController.trackConnection(
         me.CharacterAdded:Connect(function(char)
-            -- Re-save original after respawn
+            _avatarGen = _avatarGen + 1
             task.wait(2)
             if not _originalDesc then
                 AvatarController.ensureOriginalSaved()
@@ -3121,12 +3348,22 @@ do
             .. " RBar=" .. tostring(FishingUIAdapter.getRedBar() ~= nil)
             .. " PBar=" .. tostring(FishingUIAdapter.getProgressBar() ~= nil), C.subtxt)
 
+        local trace = FishingResultObserver.getTrace()
+        add("── Fishing Trace ──", C.dim)
+        add("Result Reason: " .. tostring(trace.lastFishingResultReason), C.subtxt)
+        add("Result State: " .. tostring(trace.lastFishingResultState), C.subtxt)
+        add(string.format("Last Progress: %.1f%%", (trace.lastFishingProgress or 0) * 100), C.subtxt)
+        local guiOpenStr = trace.lastFishingGuiOpenedAt > 0 and string.format("%.1fs ago", os.clock() - trace.lastFishingGuiOpenedAt) or "Never"
+        local guiCloseStr = trace.lastFishingGuiClosedAt > 0 and string.format("%.1fs ago", os.clock() - trace.lastFishingGuiClosedAt) or "Never"
+        add("GUI Opened: " .. guiOpenStr .. " | Closed: " .. guiCloseStr, C.subtxt)
+        add("Tool State: " .. tostring(trace.lastFishingToolState), C.subtxt)
+
         add("── Mining ──", C.dim)
         add("State: " .. MiningController.getState(), C.subtxt)
         add(string.format("Confirmed: %d | Attempts: %d | Failed: %d",
             sc.mineConfirmed, sc.mineAttempts, sc.mineFailed), C.subtxt)
         local tgt = MiningController.getCurrentTarget()
-        add("Target: " .. (tgt and tgt.Name or "—") .. " | Locked: " .. tostring(MiningController.isLocked()), C.subtxt)
+        add("Target: " .. (tgt and (tgt.Name .. " [" .. tgt.ClassName .. "]") or "—") .. " | Locked: " .. tostring(MiningController.isLocked()), C.subtxt)
         add("Cache entries: " .. #MiningTargetResolver.getCache()
             .. " | age: " .. string.format("%.1f", MiningTargetResolver.getCacheAge()) .. "s", C.subtxt)
 
@@ -3251,6 +3488,6 @@ LOG("RUNTIME", string.format(
     tostring(Capabilities.vim),
     tostring(Capabilities.vu)
 ))
-LOG("FISH", "Bar-gone alone → RESULT_UNCONFIRMED. SUCCESS_CONFIRMED requires explicit-catch or tool-deactivate.")
+LOG("FISH", "Fishing result: UNCONFIRMED (bar-gone, tool-deactivate, timeout do not count as confirmed success).")
 LOG("MINE", "Mine confirmed ONLY when target instance legitimately disappears after swing cycle.")
 LOG("MINE", "CRYS_OK name matching is fallback-only (priority 5 of 5). CollectionService tags and Attributes take priority.")
