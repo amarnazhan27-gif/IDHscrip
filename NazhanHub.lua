@@ -1468,6 +1468,7 @@ local function getModelMiningEvidence(model, excludeChild)
     }
 end
 
+local resolveCanonicalMiningTarget   -- forward declaration for self-tests
 local MiningTargetResolver = {}
 local MiningTargetValidator = {}
 do
@@ -1524,7 +1525,7 @@ do
     -------------------------------------------------------------------
     -- CANONICAL TARGET RESOLVER
     -------------------------------------------------------------------
-    local function resolveCanonicalMiningTarget(obj)
+    resolveCanonicalMiningTarget = function(obj)
         if not obj or typeof(obj) ~= "Instance" then return nil end
 
         if obj:IsA("Model") then
@@ -1553,10 +1554,12 @@ do
                     if parentEv.directScore >= MIN_SEMANTIC_SCORE then
                         return parent
                     end
-                    if parentEv.strongDescendantCount >= 2 then
+                    -- If CURRENT CHILD is strong AND parent has >= 1 OTHER strong descendant,
+                    -- total distinct strong descendants >= 2 => parent owns compound identity.
+                    if childEv.strong and parentEv.strongDescendantCount >= 1 then
                         return parent
                     end
-                    -- Otherwise, child Part retains ownership!
+                    -- Otherwise, child Part retains ownership.
                     return obj
                 end
             end
@@ -1695,91 +1698,177 @@ local RUN_MINING_SELF_TESTS = false
 
 local function runMiningResolverSelfTests()
     local testPassed = 0
-    local testTotal  = 5
+    local testFailed = 0
+    local testTotal  = 7
+
+    local function pass(name)
+        testPassed = testPassed + 1
+        LOG("SELF_TEST", "PASS " .. name)
+    end
+
+    local function fail(name, msg)
+        testFailed = testFailed + 1
+        WARN("SELF_TEST", "FAIL " .. name .. " — " .. tostring(msg))
+    end
 
     local testFolder = Instance.new("Folder")
     testFolder.Name = "_MiningResolverTests"
     testFolder.Parent = workspace
 
-    -- TEST A: Building Model with single child Part tagged Ore -> Canonical must be the child Part
-    local buildingModel = Instance.new("Model", testFolder)
-    buildingModel.Name = "Building"
-    local wallPart = Instance.new("Part", buildingModel)
-    wallPart.Name = "Wall"
-    local orePartA = Instance.new("Part", buildingModel)
-    orePartA.Name = "CrystalOre"
-    pcall(function() CS:AddTag(orePartA, "Ore") end)
-    local canA = resolveCanonicalMiningTarget(orePartA)
-    if canA == orePartA then
-        testPassed = testPassed + 1
+    ---------------------------------------------------------------------------
+    -- TEST A: Generic parent + SINGLE tagged child -> child Part is canonical.
+    -- Child is named neutrally ("TargetPart") so no heuristic name bonus
+    -- inflates evidence. Only the CollectionService tag counts.
+    ---------------------------------------------------------------------------
+    local buildingA = Instance.new("Model", testFolder)
+    buildingA.Name = "Building"
+    local wallA = Instance.new("Part", buildingA)
+    wallA.Name = "Wall"
+    local targetPartA = Instance.new("Part", buildingA)
+    targetPartA.Name = "TargetPart"
+    pcall(function() CS:AddTag(targetPartA, "Ore") end)
+    local canA = resolveCanonicalMiningTarget(targetPartA)
+    if canA == targetPartA then
+        pass("A: single-child-is-canonical-part")
     else
-        WARN("SELF_TEST", "TEST A failed: expected CrystalOre Part, got " .. tostring(canA and canA.Name))
+        fail("A: single-child-is-canonical-part",
+            "expected TargetPart, got " .. tostring(canA and canA.Name or "nil"))
     end
 
-    -- TEST B: DecorationModel with NeonPart and no mining semantics -> Expected nil / rejected
+    ---------------------------------------------------------------------------
+    -- TEST B: Generic decoration model (Neon material, no mining semantics)
+    -- Both model and part must return nil (rejected).
+    ---------------------------------------------------------------------------
     local decorModel = Instance.new("Model", testFolder)
     decorModel.Name = "DecorModel"
     local neonPart = Instance.new("Part", decorModel)
     neonPart.Name = "NeonLamp"
     neonPart.Material = Enum.Material.Neon
-    local canB = resolveCanonicalMiningTarget(decorModel)
-    local canBPart = resolveCanonicalMiningTarget(neonPart)
-    if canB == nil and canBPart == nil then
-        testPassed = testPassed + 1
+    local canBModel = resolveCanonicalMiningTarget(decorModel)
+    local canBPart  = resolveCanonicalMiningTarget(neonPart)
+    if canBModel == nil and canBPart == nil then
+        pass("B: neon-decoration-rejected")
     else
-        WARN("SELF_TEST", "TEST B failed: expected nil for generic Neon decoration")
+        fail("B: neon-decoration-rejected",
+            "expected nil/nil, got " .. tostring(canBModel and canBModel.Name) ..
+            " / " .. tostring(canBPart and canBPart.Name))
     end
 
-    -- TEST C: CrystalNode with TWO tagged ore children -> Expected CrystalNode Model
-    local crystalNode = Instance.new("Model", testFolder)
-    crystalNode.Name = "CrystalNode"
-    local oreChild1 = Instance.new("Part", crystalNode)
+    ---------------------------------------------------------------------------
+    -- TEST C: Neutral parent + TWO tagged children -> parent Model is canonical.
+    -- Parent name is deliberately neutral (no ore/crystal/gem keywords).
+    -- Compound ownership must be driven by the two children, NOT by parent name.
+    ---------------------------------------------------------------------------
+    local compoundModel = Instance.new("Model", testFolder)
+    compoundModel.Name = "NodeCompoundTest"
+    local oreChild1 = Instance.new("Part", compoundModel)
     oreChild1.Name = "OreA"
     pcall(function() CS:AddTag(oreChild1, "Ore") end)
-    local oreChild2 = Instance.new("Part", crystalNode)
+    local oreChild2 = Instance.new("Part", compoundModel)
     oreChild2.Name = "OreB"
     pcall(function() CS:AddTag(oreChild2, "Ore") end)
-    local canC = resolveCanonicalMiningTarget(oreChild1)
-    local canCModel = resolveCanonicalMiningTarget(crystalNode)
-    if canC == crystalNode and canCModel == crystalNode then
-        testPassed = testPassed + 1
+    local canC1     = resolveCanonicalMiningTarget(oreChild1)
+    local canC2     = resolveCanonicalMiningTarget(oreChild2)
+    local canCModel = resolveCanonicalMiningTarget(compoundModel)
+    if canC1 == compoundModel and canC2 == compoundModel and canCModel == compoundModel then
+        pass("C: two-child-compound-model-is-canonical")
     else
-        WARN("SELF_TEST", "TEST C failed: expected CrystalNode Model")
+        fail("C: two-child-compound-model-is-canonical",
+            string.format("OreA->%s OreB->%s Model->%s",
+                tostring(canC1 and canC1.Name or "nil"),
+                tostring(canC2 and canC2.Name or "nil"),
+                tostring(canCModel and canCModel.Name or "nil")))
     end
 
-    -- TEST D: Model itself has IsOre=true -> Expected Model
+    ---------------------------------------------------------------------------
+    -- TEST D: Model with IsOre=true attribute -> Model is canonical.
+    ---------------------------------------------------------------------------
     local oreModel = Instance.new("Model", testFolder)
     oreModel.Name = "Rock"
     oreModel:SetAttribute("IsOre", true)
-    local subPart = Instance.new("Part", oreModel)
-    subPart.Name = "RockPart"
-    local canD = resolveCanonicalMiningTarget(subPart)
+    local subPartD = Instance.new("Part", oreModel)
+    subPartD.Name = "RockPart"
+    local canDPart  = resolveCanonicalMiningTarget(subPartD)
     local canDModel = resolveCanonicalMiningTarget(oreModel)
-    if canD == oreModel and canDModel == oreModel then
-        testPassed = testPassed + 1
+    if canDPart == oreModel and canDModel == oreModel then
+        pass("D: model-attribute-IsOre-canonical")
     else
-        WARN("SELF_TEST", "TEST D failed: expected Rock Model")
+        fail("D: model-attribute-IsOre-canonical",
+            "Part->" .. tostring(canDPart and canDPart.Name or "nil") ..
+            " Model->" .. tostring(canDModel and canDModel.Name or "nil"))
     end
 
-    -- TEST E: GroundOre with tag Ore -> Expected accepted despite "ground" substring
+    ---------------------------------------------------------------------------
+    -- TEST E: GroundOre with tag Ore -> accepted despite "ground" substring.
+    -- Strong tag evidence must override blacklist substring.
+    ---------------------------------------------------------------------------
     local groundOre = Instance.new("Part", testFolder)
     groundOre.Name = "GroundOre"
     pcall(function() CS:AddTag(groundOre, "Ore") end)
-    local canE = resolveCanonicalMiningTarget(groundOre)
-    local scE, _ = MiningTargetResolver.scoreTarget(groundOre)
+    local canE  = resolveCanonicalMiningTarget(groundOre)
+    local scE   = MiningTargetResolver.scoreTarget(groundOre)
     if canE == groundOre and scE >= CFG.mining.scoreThreshold then
-        testPassed = testPassed + 1
+        pass("E: groundore-tag-overrides-blacklist")
     else
-        WARN("SELF_TEST", "TEST E failed: expected GroundOre accepted with tag Ore")
+        fail("E: groundore-tag-overrides-blacklist",
+            "canonical=" .. tostring(canE and canE.Name or "nil") ..
+            " score=" .. tostring(scE))
+    end
+
+    ---------------------------------------------------------------------------
+    -- TEST F: Cache dedupe — all three resolutions for two-child Model must
+    -- return THE SAME canonical object.
+    ---------------------------------------------------------------------------
+    local seenF = {}
+    seenF[canC1]     = true
+    seenF[canC2]     = true
+    seenF[canCModel] = true
+    local uniqueCount = 0
+    for _ in pairs(seenF) do uniqueCount = uniqueCount + 1 end
+    if uniqueCount == 1 then
+        pass("F: two-child-unique-canonical-count-is-1")
+    else
+        fail("F: two-child-unique-canonical-count-is-1",
+            "unique canonical count = " .. tostring(uniqueCount) .. " (expected 1)")
+    end
+
+    ---------------------------------------------------------------------------
+    -- TEST G: Control — single-child again with a name that has no heuristic
+    -- bonus ("WallPiece"). Proves Part, not parent, is canonical.
+    ---------------------------------------------------------------------------
+    local controlModel = Instance.new("Model", testFolder)
+    controlModel.Name = "StructureFrame"
+    local wallG = Instance.new("Part", controlModel)
+    wallG.Name = "WallPiece"
+    local oreG = Instance.new("Part", controlModel)
+    oreG.Name = "OreG"
+    pcall(function() CS:AddTag(oreG, "Ore") end)
+    local canG = resolveCanonicalMiningTarget(oreG)
+    if canG == oreG then
+        pass("G: single-child-parent-not-promoted")
+    else
+        fail("G: single-child-parent-not-promoted",
+            "expected OreG Part, got " .. tostring(canG and canG.Name or "nil"))
     end
 
     pcall(function() testFolder:Destroy() end)
-    LOG("SELF_TEST", string.format("Mining resolver self-tests: %d/%d passed", testPassed, testTotal))
-    return testPassed == testTotal
+
+    local allPass = (testPassed == testTotal)
+    LOG("SELF_TEST", string.format(
+        "Mining resolver self-tests: %d/%d passed, %d failed",
+        testPassed, testTotal, testFailed))
+    return allPass
 end
 
 if RUN_MINING_SELF_TESTS then
-    pcall(runMiningResolverSelfTests)
+    local ok, result = pcall(runMiningResolverSelfTests)
+    if not ok then
+        WARN("SELF_TEST", "CRASH: " .. tostring(result))
+    elseif result ~= true then
+        WARN("SELF_TEST", "FAILED — one or more mining resolver tests did not pass")
+    else
+        LOG("SELF_TEST", "ALL PASS")
+    end
 end
 
 ---------------------------------------------------------------------------
