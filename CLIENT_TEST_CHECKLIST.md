@@ -14,6 +14,9 @@ This document details the manual test procedures to validate the client system i
   - Execute script a second time while UI is already running.
   - Verify old UI and connections are cleaned up, without duplicate threads or duplicate UI elements.
   - Verify no memory or connection leaks.
+- [ ] **Spectate & Re-execution (Case E)**
+  - Start Spectating a player, then re-execute the script or call `RuntimeController.cleanup()`.
+  - Verify `PlayerController.stopSpectate()` is invoked and camera restores smoothly to local player's Humanoid.
 - [ ] **Mode Switching**
   - Switch rapidly between **HOME**, **FISHING**, **MINING**, **AVATAR**, **SPOTS**, **SETTINGS**, **DIAGNOSTICS**.
   - Verify running background tasks of the previous mode terminate immediately (generation ID check).
@@ -46,24 +49,29 @@ This document details the manual test procedures to validate the client system i
 
 ---
 
-## 3. Auto Mining
+## 3. Auto Mining & Target Canonicalization
 
 - [ ] **Mining: No Target Available**
   - Toggle Mining ON when no mineable parts/models are in range.
   - Verify state shows `SCAN` / `IDLE` waiting without error loops.
-- [ ] **Model Target Support**
-  - Place a `Model` containing mineral parts with `CollectionService` tag or `IsOre` attribute.
-  - Verify `MiningTargetResolver` identifies and scores the Model as a single unified target (not multiple duplicate child parts).
-  - Verify character navigates to the Model's bounding box perimeter and aims at its pivot/center.
-- [ ] **Path.Blocked Handling**
-  - Block the character's path with a dynamic obstacle during mining navigation.
-  - Verify `Path.Blocked` event fires and triggers path recomputation up to `maxPathRecomputes` (3).
-  - Verify character re-routes or cleanly times out without getting stuck in an infinite loop.
-- [ ] **Target Disappears mid-mining**
-  - Delete or mine out the target instance while character is walking towards or swinging at it.
-  - Verify character immediately aborts current cycle, increments `mineConfirmed` (if legitimately depleted) or retargets, and restores exact `WalkSpeed`.
+- [ ] **Child Part Tagged Ore Inside Generic Model (Case A)**
+  - Place a child `Part` tagged `Ore` (or with `IsOre=true`) inside a generic untagged Model (e.g. `Model "Building"`).
+  - Verify strong child evidence is **NOT** lost and child Part remains the selected target.
+- [ ] **Generic Model Containing Neon Decorative Parts (Case B)**
+  - Place a generic decoration Model with `Neon` parts but no semantic mining tags/attributes/names.
+  - Verify it is **NOT** selected as a mining target (rejected by `MIN_SEMANTIC_SCORE` floor).
+- [ ] **Model with Mining Evidence on Descendant (Case C)**
+  - Place a `Model` where descendants provide aggregate mining evidence (e.g. `Model "CrystalNode"` with child ore parts).
+  - Verify the canonical `Model` is selected once (globally deduplicated, child parts not added as separate duplicate targets).
+- [ ] **Path Blocked Exceeding Max Recomputes (Case D)**
+  - Block character path with dynamic obstacles continuously.
+  - Verify `Path.Blocked` recomputes up to exact limit `maxPathRecomputes` (3) and logs `"Path.Blocked — recomputing (1/3)"`, `(2/3)`, `(3/3)`, then logs `"Path blocked — recompute limit reached"` and returns `"blocked"`.
+  - Verify **no** `"(4/3)"` log occurs.
+- [ ] **Target Disappears / Depleted mid-mining**
+  - Delete or deplete the target instance while character is walking towards or swinging at it.
+  - Verify `isTargetDepleted()` detects instance removal and cleanly triggers completion / retargeting without getting stuck.
 - [ ] **WalkSpeed Restoration Guarantee**
-  - Verify original `WalkSpeed` is restored in all cases (target reached, target gone, mode switch, error, timeout).
+  - Verify original `WalkSpeed` is restored in all cases (target reached, target gone, mode switch, error, timeout, blocked).
 
 ---
 

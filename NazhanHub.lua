@@ -1235,6 +1235,8 @@ local CRYS_NO_BLACKLIST = {
     "house","building","room","ground","terrain","base",
 }
 
+local MIN_SEMANTIC_SCORE = 3
+
 local function getTargetPosition(target)
     if not target then return nil end
     if target:IsA("Model") then
@@ -1267,6 +1269,93 @@ local function getTargetSize(target)
         return target.Size
     end
     return Vector3.new(1, 1, 1)
+end
+
+-- Depletion check: conservative confirmation that target instance was legitimately destroyed/depleted
+local function isTargetDepleted(target)
+    if not target then return true end
+    if not target.Parent then return true end
+    local ok, inWs = pcall(function() return target:IsDescendantOf(workspace) end)
+    if not ok or not inWs then return true end
+
+    if target:IsA("Model") then
+        local hasPart = false
+        for _, desc in ipairs(target:GetDescendants()) do
+            if desc:IsA("BasePart") then
+                hasPart = true
+                break
+            end
+        end
+        if not hasPart then return true end
+    end
+
+    return false
+end
+
+-- Evaluates semantic mining evidence WITHOUT distance and WITHOUT generic visual bonuses
+local function getMiningEvidenceScore(inst)
+    if not inst or typeof(inst) ~= "Instance" then return 0, "none" end
+
+    -- Blacklist check on instance name
+    local ln = inst.Name:lower()
+    for _, bl in ipairs(CRYS_NO_BLACKLIST) do
+        if ln:find(bl, 1, true) then return -999, "blacklisted-name" end
+    end
+
+    local semScore = 0
+    local semReason = "none"
+
+    -- Priority 1: CollectionService tags (Strong: +20)
+    local okTags, tags = pcall(function() return CS:GetTags(inst) end)
+    if okTags and tags then
+        for _, tag in ipairs(tags) do
+            local tl = tag:lower()
+            if tl:find("ore") or tl:find("crystal") or tl:find("mine") or tl:find("gem") then
+                semScore = semScore + 20
+                semReason = "tag:" .. tag
+                break
+            end
+        end
+    end
+
+    -- Priority 2: Attributes (Strong: +15, +10)
+    local isOre = inst:GetAttribute("IsOre") == true
+               or inst:GetAttribute("IsCrystal") == true
+               or inst:GetAttribute("IsMineTarget") == true
+               or inst:GetAttribute("Mineable") == true
+    if isOre then
+        semScore = semScore + 15
+        if semReason == "none" then semReason = "attribute:ore" end
+    end
+    local oreType = inst:GetAttribute("OreType") or inst:GetAttribute("ResourceType")
+    if oreType then
+        semScore = semScore + 10
+        if semReason == "none" then semReason = "attribute:resource" end
+    end
+
+    -- Priority 3: Container/folder parent name match (Medium: +8)
+    local par = inst.Parent
+    if par and par ~= workspace then
+        local parName = par.Name:lower()
+        for _, cn in ipairs(CRYS_OK_FALLBACK) do
+            if parName:find(cn:lower(), 1, true) then
+                semScore = semScore + 8
+                if semReason == "none" then semReason = "container-name:" .. par.Name end
+                break
+            end
+        end
+    end
+
+    -- Priority 5: Name heuristic (Weak: +3)
+    for _, cn in ipairs(CRYS_OK_FALLBACK) do
+        if ln:find(cn:lower(), 1, true) then
+            semScore = semScore + 3
+            if semReason == "none" then semReason = "name-heuristic" end
+            break
+        end
+    end
+
+    return semScore, semReason
 end
 
 local MiningTargetResolver = {}
@@ -1323,6 +1412,76 @@ do
     end
 
     -------------------------------------------------------------------
+    -- CANONICAL TARGET RESOLVER
+    -------------------------------------------------------------------
+    local function resolveCanonicalMiningTarget(obj)
+        if not obj or typeof(obj) ~= "Instance" then return nil end
+
+        if obj:IsA("Model") then
+            if not MiningTargetValidator.isValid(obj) then return nil end
+            local modelSemScore, _ = getMiningEvidenceScore(obj)
+            -- Aggregate evidence from descendants (up to first 15 BaseParts)
+            local count = 0
+            for _, desc in ipairs(obj:GetDescendants()) do
+                if desc:IsA("BasePart") then
+                    count = count + 1
+                    local descSemScore, _ = getMiningEvidenceScore(desc)
+                    if descSemScore > 0 then
+                        modelSemScore = math.max(modelSemScore, descSemScore)
+                    end
+                    if count >= 15 then break end
+                end
+            end
+            if modelSemScore >= MIN_SEMANTIC_SCORE then
+                return obj
+            end
+            return nil
+
+        elseif obj:IsA("BasePart") then
+            if not MiningTargetValidator.isValid(obj) then return nil end
+            local childSemScore, _ = getMiningEvidenceScore(obj)
+
+            local parent = obj.Parent
+            if parent and parent:IsA("Model") and parent ~= workspace and not parent:IsA("Workspace") then
+                if MiningTargetValidator.isValid(parent) then
+                    local parentDirectSem, _ = getMiningEvidenceScore(parent)
+                    local parentAggSem = parentDirectSem
+                    local count = 0
+                    for _, desc in ipairs(parent:GetDescendants()) do
+                        if desc:IsA("BasePart") then
+                            count = count + 1
+                            local dScore, _ = getMiningEvidenceScore(desc)
+                            if dScore > 0 then
+                                parentAggSem = math.max(parentAggSem, dScore)
+                            end
+                            if count >= 15 then break end
+                        end
+                    end
+
+                    -- If parent Model has equal or stronger meaningful mining evidence, return parent Model
+                    if parentAggSem >= MIN_SEMANTIC_SCORE and parentAggSem >= childSemScore then
+                        return parent
+                    end
+
+                    -- If child Part has stronger evidence, keep the Part
+                    if childSemScore >= MIN_SEMANTIC_SCORE then
+                        return obj
+                    end
+
+                    return nil
+                end
+            end
+
+            if childSemScore >= MIN_SEMANTIC_SCORE then
+                return obj
+            end
+            return nil
+        end
+
+        return nil
+    end
+
+    -------------------------------------------------------------------
     -- SCORING
     -------------------------------------------------------------------
     local function isBlacklisted(name)
@@ -1345,73 +1504,53 @@ do
             par = par.Parent
         end
 
-        local score  = 0
-        local reason = "unknown"
-
-        -- Priority 1: CollectionService tags
-        local tags = CS:GetTags(inst)
-        for _, tag in ipairs(tags) do
-            local tl = tag:lower()
-            if tl:find("ore") or tl:find("crystal") or tl:find("mine") or tl:find("gem") then
-                score = score + 20; reason = "tag:" .. tag; break
-            end
-        end
-
-        -- Priority 2: Attributes
-        if inst:GetAttribute("IsOre") == true
-        or inst:GetAttribute("IsCrystal") == true
-        or inst:GetAttribute("IsMineTarget") == true
-        or inst:GetAttribute("Mineable") == true then
-            score = score + 15; reason = (score > 15 and reason or "attribute")
-        end
-        local oreType = inst:GetAttribute("OreType") or inst:GetAttribute("ResourceType")
-        if oreType then
-            score = score + 10; reason = (score > 10 and reason or "attribute:resource")
-        end
-
-        -- Priority 3: Known container/folder (parent named like resource)
-        local parName = (inst.Parent and inst.Parent.Name or ""):lower()
-        for _, cn in ipairs(CRYS_OK_FALLBACK) do
-            if parName:find(cn:lower(), 1, true) then
-                score = score + 8; reason = (score > 8 and reason or "container-name")
-                break
-            end
-        end
-
-        -- Priority 4: Object structure semantics (Neon material / Model structure)
+        -- Calculate semantic score
+        local semScore, semReason = getMiningEvidenceScore(inst)
         if inst:IsA("Model") then
-            score = score + 3
+            local count = 0
+            for _, desc in ipairs(inst:GetDescendants()) do
+                if desc:IsA("BasePart") then
+                    count = count + 1
+                    local descScore, descReason = getMiningEvidenceScore(desc)
+                    if descScore > semScore then
+                        semScore = descScore
+                        semReason = "descendant:" .. descReason
+                    end
+                    if count >= 15 then break end
+                end
+            end
+        end
+
+        -- Require semantic floor
+        if semScore < MIN_SEMANTIC_SCORE then
+            return -999, "below-semantic-floor"
+        end
+
+        local visualScore = 0
+        -- Visual / structural bonuses (applied only after passing semantic floor)
+        if inst:IsA("Model") then
+            visualScore = visualScore + 3
             for _, c in ipairs(inst:GetChildren()) do
                 if c:IsA("BasePart") and c.Material == Enum.Material.Neon then
-                    score = score + 4
+                    visualScore = visualScore + 4
                     break
                 end
             end
         else
-            if inst.Material == Enum.Material.Neon then score = score + 4 end
-            if inst:IsA("MeshPart") then score = score + 2 end
-            if inst.Transparency < 0.85 then score = score + 1 end
-            if inst.CanCollide then score = score + 1 end
+            if inst.Material == Enum.Material.Neon then visualScore = visualScore + 4 end
+            if inst:IsA("MeshPart") then visualScore = visualScore + 2 end
+            if inst.Transparency < 0.85 then visualScore = visualScore + 1 end
+            if inst.CanCollide then visualScore = visualScore + 1 end
         end
-
-        -- Priority 5: Name heuristic (CRYS_OK – fallback, low confidence)
-        local ln = inst.Name:lower()
-        local nameScore = 0
-        for _, cn in ipairs(CRYS_OK_FALLBACK) do
-            if ln:find(cn:lower(), 1, true) then
-                nameScore = 3
-                if score == 0 then reason = "name-heuristic(low-confidence)" end
-                break
-            end
-        end
-        score = score + nameScore
 
         -- Size penalties
+        local sizeScore = 0
         local sz = getTargetSize(inst)
-        if sz.X > 22 or sz.Y > 22 or sz.Z > 22 then score = score - 6 end
-        if sz.X < 0.35 and sz.Y < 0.35 and sz.Z < 0.35 then score = score - 5 end
+        if sz.X > 22 or sz.Y > 22 or sz.Z > 22 then sizeScore = sizeScore - 6 end
+        if sz.X < 0.35 and sz.Y < 0.35 and sz.Z < 0.35 then sizeScore = sizeScore - 5 end
 
-        return score, reason
+        local finalScore = semScore + visualScore + sizeScore
+        return finalScore, semReason
     end
 
     -------------------------------------------------------------------
@@ -1423,30 +1562,16 @@ do
     function MiningTargetResolver.refreshCache()
         _cache  = {}
         _cacheAt = os.clock()
-        local threshold  = CFG.mining.scoreThreshold
-        local seenModels = {}
+        local threshold = CFG.mining.scoreThreshold
+        local seen = {}
 
         for _, obj in ipairs(workspace:GetDescendants()) do
-            -- Normalize candidate to parent Model if part is in a valid Model
-            local candidate = obj
-            if obj:IsA("BasePart") and obj.Parent and obj.Parent:IsA("Model") and obj.Parent ~= workspace then
-                if MiningTargetValidator.isValid(obj.Parent) then
-                    candidate = obj.Parent
-                end
-            end
-
-            if candidate:IsA("Model") then
-                if not seenModels[candidate] then
-                    seenModels[candidate] = true
-                    local sc, _ = MiningTargetResolver.scoreTarget(candidate)
-                    if sc >= threshold then
-                        _cache[#_cache + 1] = candidate
-                    end
-                end
-            elseif candidate:IsA("BasePart") then
-                local sc, _ = MiningTargetResolver.scoreTarget(candidate)
+            local canonical = resolveCanonicalMiningTarget(obj)
+            if canonical and not seen[canonical] then
+                seen[canonical] = true
+                local sc, _ = MiningTargetResolver.scoreTarget(canonical)
                 if sc >= threshold then
-                    _cache[#_cache + 1] = candidate
+                    _cache[#_cache + 1] = canonical
                 end
             end
         end
@@ -1625,7 +1750,7 @@ do
     --[[
         Move to targetPos using Pathfinding with Path.Blocked handling and fallback MoveTo.
         Saves and restores exact original WalkSpeed in finally-style cleanup.
-        Returns: "arrived" | "mode-changed" | "target-gone" | "timeout" | "failed"
+        Returns: "arrived" | "mode-changed" | "target-gone" | "timeout" | "blocked" | "failed"
     ]]
     function MiningMovement.moveTo(hum, targetPos, targetPart, miningGeneration)
         local ch = me.Character
@@ -1674,7 +1799,7 @@ do
                 if miningGeneration ~= RuntimeController.getGeneration("mine_ctrl") then
                     result = "mode-changed"; break
                 end
-                if targetPart and not targetPart.Parent then
+                if targetPart and isTargetDepleted(targetPart) then
                     result = "target-gone"; break
                 end
                 if os.clock() - t0_total > CFG.mining.moveTimeout then
@@ -1713,7 +1838,7 @@ do
                     if miningGeneration ~= RuntimeController.getGeneration("mine_ctrl") then
                         result = "mode-changed"; isArr = false; break
                     end
-                    if targetPart and not targetPart.Parent then
+                    if targetPart and isTargetDepleted(targetPart) then
                         result = "target-gone"; isArr = false; break
                     end
                     if os.clock() - t0_total > CFG.mining.moveTimeout then
@@ -1735,7 +1860,7 @@ do
                         if miningGeneration ~= RuntimeController.getGeneration("mine_ctrl") then
                             result = "mode-changed"; isArr = false; break
                         end
-                        if targetPart and not targetPart.Parent then
+                        if targetPart and isTargetDepleted(targetPart) then
                             result = "target-gone"; isArr = false; break
                         end
                         if os.clock() - t0_total > CFG.mining.moveTimeout then
@@ -1791,8 +1916,13 @@ do
                     result = "arrived"
                     break
                 elseif pathNeedsRecompute then
+                    if recomputes >= maxRecomputes then
+                        WARN("MINE", "Path blocked — recompute limit reached")
+                        result = "blocked"
+                        break
+                    end
                     recomputes = recomputes + 1
-                    WARN("MINE", string.format("Path.Blocked encountered – recomputing (%d/%d)", recomputes, maxRecomputes))
+                    WARN("MINE", string.format("Path.Blocked — recomputing (%d/%d)", recomputes, maxRecomputes))
                     task.wait(0.1)
                 else
                     if ch.PrimaryPart and (ch.PrimaryPart.Position - targetPos).Magnitude <= 2.5 then
@@ -1999,7 +2129,7 @@ do
                                 return
                             elseif moveResult == "target-gone" then
                                 _currentTarget = nil; _locked = false; return
-                            elseif moveResult == "timeout" or moveResult == "failed" then
+                            elseif moveResult == "timeout" or moveResult == "blocked" or moveResult == "failed" then
                                 _failCount = _failCount + 1
                                 if _failCount >= CFG.mining.maxFailCount then
                                     WARN("MINE", "Max fail count – retargeting")
@@ -2047,7 +2177,7 @@ do
                     for s = 1, 10 do
                         if gen ~= RuntimeController.getGeneration("mine_ctrl") then break end
                         if RuntimeController.currentMode ~= "MINE" then break end
-                        if not crystal.Parent or not MiningTargetValidator.isValid(crystal) then break end
+                        if isTargetDepleted(crystal) or not MiningTargetValidator.isValid(crystal) then break end
 
                         MiningActionAdapter.tryActivate(tool, aimPos)
                         task.wait(CFG.mining.hitInterval + 0.05)
@@ -2060,8 +2190,8 @@ do
                     setState(STATES.VERIFYING)
                     task.wait(0.15)
 
-                    if not crystal.Parent or not MiningTargetValidator.isValid(crystal) then
-                        -- TARGET LEGITIMATELY GONE = CONFIRMED MINE
+                    if isTargetDepleted(crystal) then
+                        -- TARGET LEGITIMATELY DEPLETED = CONFIRMED MINE
                         RuntimeController.sessionCounters.mineConfirmed = RuntimeController.sessionCounters.mineConfirmed + 1
                         if _onCountChange then
                             pcall(_onCountChange, "confirmed", RuntimeController.sessionCounters.mineConfirmed)
@@ -2263,7 +2393,7 @@ end
 ---------------------------------------------------------------------------
 -- 21. PLAYER CONTROLLER – player list, spectate, utilities
 ---------------------------------------------------------------------------
-local PlayerController = {}
+PlayerController = {}
 do
     local _spectating     = false
     local _spectatePlayer = nil
