@@ -1081,10 +1081,14 @@ task.spawn(function()
 			safe(function()
 				local ch = me.Character; if not ch then return end
 				local hum = ch:FindFirstChildOfClass("Humanoid"); if not hum then return end
-				setJumpSuppressed(true)
-
 				local tool = equipTool("FISH")
-				if not tool then fStatL.Text="Status: No rod"; return end
+				if not tool then
+					setJumpSuppressed(false)
+					fStatL.Text="Status: No rod"
+					return
+				end
+
+				setJumpSuppressed(true)
 				if fishState=="IDLE" and not isCasting then
 					isCasting=true; castSess=castSess+1; local sess=castSess
 					task.spawn(function()

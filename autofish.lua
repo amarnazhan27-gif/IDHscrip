@@ -40,7 +40,6 @@ local CFG = {
 	watchdog         = true,
 	netAdapt         = true,
 	autoRejoin       = false,
-	autoDeclineCarry = false,
 }
 
 local FISH_TOOLS = { "Fishing Rod", "Rod", "Pancing", "FishingRod" }
@@ -620,6 +619,7 @@ fishSw.MouseButton1Click:Connect(function()
 	else
 		active=false
 		castSess=castSess+1
+		isCasting=false
 		isSpace=false
 		pcall(function() VIM:SendKeyEvent(false,Enum.KeyCode.Space,false,game) end)
 		setJumpSuppressed(false)
@@ -813,7 +813,6 @@ sSec("PERFORMA",sy); sy=sy+14
 mkToggle(pS,sy,"Adaptasi Frame Time",    CFG.netAdapt,        function(v) CFG.netAdapt=v end); sy=sy+40
 sSec("UTILITAS",sy); sy=sy+14
 mkToggle(pS,sy,"Auto Kembali ke Spot",   CFG.autoRejoin,      function(v) CFG.autoRejoin=v end); sy=sy+40
-mkToggle(pS,sy,"Tolak Carry Otomatis",   CFG.autoDeclineCarry,function(v) CFG.autoDeclineCarry=v end); sy=sy+40
 mkToggle(pS,sy,"Anti-AFK Mouse Sweep",   CFG.antiAFK,         function(v) CFG.antiAFK=v end); sy=sy+40
 mkToggle(pS,sy,"Watchdog Auto-Reset",    CFG.watchdog,        function(v) CFG.watchdog=v end); sy=sy+40
 pS.CanvasSize=UDim2.new(0,0,0,sy+10)
@@ -1274,14 +1273,15 @@ task.spawn(function()
 				local hum = ch:FindFirstChildOfClass("Humanoid")
 				if not hum then return end
 
-				setJumpSuppressed(true)
-
 				local tool = findAndEquipRod()
 				if not tool then
+					setJumpSuppressed(false)
 					stateL.Text = "Tidak ada rod!"
 					setDot(C.gold)
 					return
 				end
+
+				setJumpSuppressed(true)
 
 				if fishState == "IDLE" and not isCasting then
 					isCasting = true
