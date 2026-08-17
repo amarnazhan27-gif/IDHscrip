@@ -114,13 +114,6 @@ local function cleanupCharacterState()
 		VIM:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game)
 	end)
 	setJumpSuppressed(false)
-	pcall(function()
-		local ch = me.Character
-		local hum = ch and ch:FindFirstChildOfClass("Humanoid")
-		if hum then
-			hum.WalkSpeed = 16
-		end
-	end)
 end
 
 -- ── Forward declarations ─────────────────────────────
@@ -128,6 +121,7 @@ local gui
 local doResetFish
 local mineRoutine
 local updateRod
+local mStatL
 
 local M = { c = {}, on = true }
 function M.kill()
@@ -494,7 +488,7 @@ local fishSw = mkToggle(fp, "Fishing System", 168, false, function(on)
 	if on then
 		if mode=="MINE" then
 			mode="OFF"
-			mStatL.Text="Status: Idle"
+			if mStatL then mStatL.Text="Status: Idle" end
 			miningLocked=false
 			setJumpSuppressed(false)
 		end
@@ -503,6 +497,7 @@ local fishSw = mkToggle(fp, "Fishing System", 168, false, function(on)
 	else
 		mode="OFF"
 		castSess=castSess+1
+		isCasting=false
 		isSpace=false
 		pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.Space, false, game) end)
 		setJumpSuppressed(false)
@@ -526,7 +521,7 @@ rstSt.Color = Color3.fromRGB(44,44,52); rstSt.Thickness = 1
 -- ========== MINING PANEL ==========
 local mp = panels["Mining"]
 
-local mStatL = mkLbl(mp, "Status: Idle", 10, 12, Color3.fromRGB(135,135,145))
+mStatL = mkLbl(mp, "Status: Idle", 10, 12, Color3.fromRGB(135,135,145))
 local mCntL  = mkLbl(mp, "Crystals Mined: 0", 28, 11)
 
 mkSep(mp, 52)
@@ -610,6 +605,12 @@ local mineSw = mkToggle(mp, "Mining System", 176, false, function(on)
 	if on then
 		if mode=="FISH" then
 			mode="OFF"
+			castSess=castSess+1
+			isCasting=false
+			isSpace=false
+			pcall(function()
+				VIM:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
+			end)
 			setPhase(0)
 			fStatL.Text="Status: Idle"
 			setJumpSuppressed(false)
