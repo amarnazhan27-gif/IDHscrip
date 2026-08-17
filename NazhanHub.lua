@@ -101,15 +101,16 @@ local CFG = {
         fatigueDur     = 8,
     },
     mining = {
-        scanInterval      = 1.5,    -- seconds between full workspace scans
-        stopDistance      = 2.5,
-        moveTimeout       = 20,
-        hitInterval       = 0.28,   -- MIN_HIT_INTERVAL between activations
-        maxHitCycles      = 8,      -- swing cycles before giving up on target
-        maxFailCount      = 4,
-        maxPathRecomputes = 3,      -- max recomputes on Path.Blocked
-        targetMaxDist     = 300,
-        scoreThreshold    = 5,
+        scanInterval            = 1.5,    -- seconds between full workspace scans
+        stopDistance            = 2.5,
+        moveTimeout             = 20,
+        hitInterval             = 0.28,   -- MIN_HIT_INTERVAL between activations
+        maxHitCycles            = 8,      -- swing cycles before giving up on target
+        maxFailCount            = 4,
+        maxPathRecomputes       = 3,      -- max recomputes on Path.Blocked
+        maxEvidenceDescendants  = 64,     -- max descendant parts scanned for evidence
+        targetMaxDist           = 300,
+        scoreThreshold          = 5,
     },
     performance = {
         smooth = 0.08,           -- EMA weight for frame-time rolling avg
@@ -1292,70 +1293,179 @@ local function isTargetDepleted(target)
     return false
 end
 
--- Evaluates semantic mining evidence WITHOUT distance and WITHOUT generic visual bonuses
-local function getMiningEvidenceScore(inst)
-    if not inst or typeof(inst) ~= "Instance" then return 0, "none" end
-
-    -- Blacklist check on instance name
-    local ln = inst.Name:lower()
-    for _, bl in ipairs(CRYS_NO_BLACKLIST) do
-        if ln:find(bl, 1, true) then return -999, "blacklisted-name" end
+-- Semantic mining evidence evaluation returning structured details
+local function getMiningEvidence(inst)
+    if not inst or typeof(inst) ~= "Instance" then
+        return {
+            score = 0,
+            strong = false,
+            reason = "none",
+            tagScore = 0,
+            attributeScore = 0,
+            nameScore = 0,
+            containerScore = 0,
+            isBlacklistedName = false,
+        }
     end
 
-    local semScore = 0
-    local semReason = "none"
+    local ln = inst.Name:lower()
+    local isBlacklisted = false
+    for _, bl in ipairs(CRYS_NO_BLACKLIST) do
+        if ln:find(bl, 1, true) then
+            isBlacklisted = true
+            break
+        end
+    end
 
     -- Priority 1: CollectionService tags (Strong: +20)
+    local tagScore = 0
+    local tagReason = nil
     local okTags, tags = pcall(function() return CS:GetTags(inst) end)
     if okTags and tags then
         for _, tag in ipairs(tags) do
             local tl = tag:lower()
             if tl:find("ore") or tl:find("crystal") or tl:find("mine") or tl:find("gem") then
-                semScore = semScore + 20
-                semReason = "tag:" .. tag
+                tagScore = 20
+                tagReason = "tag:" .. tag
                 break
             end
         end
     end
 
     -- Priority 2: Attributes (Strong: +15, +10)
+    local attrScore = 0
+    local attrReason = nil
     local isOre = inst:GetAttribute("IsOre") == true
                or inst:GetAttribute("IsCrystal") == true
                or inst:GetAttribute("IsMineTarget") == true
                or inst:GetAttribute("Mineable") == true
     if isOre then
-        semScore = semScore + 15
-        if semReason == "none" then semReason = "attribute:ore" end
+        attrScore = 15
+        attrReason = "attribute:IsOre"
     end
     local oreType = inst:GetAttribute("OreType") or inst:GetAttribute("ResourceType")
     if oreType then
-        semScore = semScore + 10
-        if semReason == "none" then semReason = "attribute:resource" end
+        attrScore = math.max(attrScore, 10)
+        attrReason = attrReason or ("attribute:" .. tostring(oreType))
     end
 
+    local strong = (tagScore > 0 or attrScore > 0)
+
     -- Priority 3: Container/folder parent name match (Medium: +8)
+    local containerScore = 0
+    local containerReason = nil
     local par = inst.Parent
-    if par and par ~= workspace then
+    if par and par ~= workspace and not par:IsA("Workspace") then
         local parName = par.Name:lower()
         for _, cn in ipairs(CRYS_OK_FALLBACK) do
             if parName:find(cn:lower(), 1, true) then
-                semScore = semScore + 8
-                if semReason == "none" then semReason = "container-name:" .. par.Name end
+                containerScore = 8
+                containerReason = "container-heuristic:" .. par.Name
                 break
             end
         end
     end
 
     -- Priority 5: Name heuristic (Weak: +3)
+    local nameScore = 0
+    local nameReason = nil
     for _, cn in ipairs(CRYS_OK_FALLBACK) do
         if ln:find(cn:lower(), 1, true) then
-            semScore = semScore + 3
-            if semReason == "none" then semReason = "name-heuristic" end
+            nameScore = 3
+            nameReason = "name-heuristic"
             break
         end
     end
 
-    return semScore, semReason
+    -- Blacklist handling:
+    -- Strong evidence takes precedence over name blacklist (diagnostic/penalty at most, no hard veto).
+    -- If only weak name/container heuristic exists, blacklist vetoes it.
+    if isBlacklisted and not strong then
+        nameScore = 0
+        containerScore = 0
+    end
+
+    local totalScore = tagScore + attrScore + containerScore + nameScore
+    local reason = tagReason or attrReason or containerReason or nameReason or "none"
+
+    return {
+        score = totalScore,
+        strong = strong,
+        reason = reason,
+        tagScore = tagScore,
+        attributeScore = attrScore,
+        nameScore = nameScore,
+        containerScore = containerScore,
+        isBlacklistedName = isBlacklisted,
+    }
+end
+
+local function getMiningEvidenceScore(inst)
+    local ev = getMiningEvidence(inst)
+    return ev.score, ev.reason, ev.strong
+end
+
+-- Inspects Model direct evidence and descendant BasePart evidence (excluding specified child if provided)
+local function getModelMiningEvidence(model, excludeChild)
+    if not model or not model:IsA("Model") then
+        return {
+            directScore = 0,
+            directStrong = false,
+            strongDescendantCount = 0,
+            bestDescendantScore = 0,
+            bestDescendant = nil,
+            reason = "none",
+        }
+    end
+
+    local directEv = getMiningEvidence(model)
+    local directScore = directEv.score
+    local directStrong = directEv.strong
+    local reason = directEv.reason
+
+    local strongDescendantCount = 0
+    local bestDescendantScore = 0
+    local bestDescendant = nil
+
+    local maxScan = (CFG and CFG.mining and CFG.mining.maxEvidenceDescendants) or 64
+    local scanned = 0
+
+    for _, desc in ipairs(model:GetDescendants()) do
+        if desc:IsA("BasePart") then
+            -- Exclude specified child and its descendants
+            if not (excludeChild and (desc == excludeChild or desc:IsDescendantOf(excludeChild))) then
+                scanned = scanned + 1
+                local descEv = getMiningEvidence(desc)
+                if descEv.strong then
+                    strongDescendantCount = strongDescendantCount + 1
+                end
+                if descEv.score > bestDescendantScore then
+                    bestDescendantScore = descEv.score
+                    bestDescendant = desc
+                    if not directStrong then
+                        reason = "descendant:" .. descEv.reason
+                    end
+                end
+
+                -- Early stop if strong identity established or max scan reached
+                if (directStrong or strongDescendantCount >= 2) and scanned >= 4 then
+                    break
+                end
+                if scanned >= maxScan then
+                    break
+                end
+            end
+        end
+    end
+
+    return {
+        directScore = directScore,
+        directStrong = directStrong,
+        strongDescendantCount = strongDescendantCount,
+        bestDescendantScore = bestDescendantScore,
+        bestDescendant = bestDescendant,
+        reason = (directScore >= MIN_SEMANTIC_SCORE and directEv.reason) or (strongDescendantCount >= 2 and "model-multi-descendant") or reason,
+    }
 end
 
 local MiningTargetResolver = {}
@@ -1419,63 +1529,39 @@ do
 
         if obj:IsA("Model") then
             if not MiningTargetValidator.isValid(obj) then return nil end
-            local modelSemScore, _ = getMiningEvidenceScore(obj)
-            -- Aggregate evidence from descendants (up to first 15 BaseParts)
-            local count = 0
-            for _, desc in ipairs(obj:GetDescendants()) do
-                if desc:IsA("BasePart") then
-                    count = count + 1
-                    local descSemScore, _ = getMiningEvidenceScore(desc)
-                    if descSemScore > 0 then
-                        modelSemScore = math.max(modelSemScore, descSemScore)
-                    end
-                    if count >= 15 then break end
-                end
-            end
-            if modelSemScore >= MIN_SEMANTIC_SCORE then
+            local modelEv = getModelMiningEvidence(obj, nil)
+            -- Model qualifies as canonical target if:
+            -- A. Direct evidence >= MIN_SEMANTIC_SCORE
+            -- B. At least 2 distinct strong mining descendants
+            if modelEv.directScore >= MIN_SEMANTIC_SCORE or modelEv.strongDescendantCount >= 2 then
                 return obj
             end
             return nil
 
         elseif obj:IsA("BasePart") then
             if not MiningTargetValidator.isValid(obj) then return nil end
-            local childSemScore, _ = getMiningEvidenceScore(obj)
+            local childEv = getMiningEvidence(obj)
+            if childEv.score < MIN_SEMANTIC_SCORE then
+                return nil
+            end
 
             local parent = obj.Parent
             if parent and parent:IsA("Model") and parent ~= workspace and not parent:IsA("Workspace") then
                 if MiningTargetValidator.isValid(parent) then
-                    local parentDirectSem, _ = getMiningEvidenceScore(parent)
-                    local parentAggSem = parentDirectSem
-                    local count = 0
-                    for _, desc in ipairs(parent:GetDescendants()) do
-                        if desc:IsA("BasePart") then
-                            count = count + 1
-                            local dScore, _ = getMiningEvidenceScore(desc)
-                            if dScore > 0 then
-                                parentAggSem = math.max(parentAggSem, dScore)
-                            end
-                            if count >= 15 then break end
-                        end
-                    end
-
-                    -- If parent Model has equal or stronger meaningful mining evidence, return parent Model
-                    if parentAggSem >= MIN_SEMANTIC_SCORE and parentAggSem >= childSemScore then
+                    -- Check if parent Model owns the mining identity WITHOUT including obj itself
+                    local parentEv = getModelMiningEvidence(parent, obj)
+                    if parentEv.directScore >= MIN_SEMANTIC_SCORE then
                         return parent
                     end
-
-                    -- If child Part has stronger evidence, keep the Part
-                    if childSemScore >= MIN_SEMANTIC_SCORE then
-                        return obj
+                    if parentEv.strongDescendantCount >= 2 then
+                        return parent
                     end
-
-                    return nil
+                    -- Otherwise, child Part retains ownership!
+                    return obj
                 end
             end
 
-            if childSemScore >= MIN_SEMANTIC_SCORE then
-                return obj
-            end
-            return nil
+            return obj
         end
 
         return nil
@@ -1484,46 +1570,29 @@ do
     -------------------------------------------------------------------
     -- SCORING
     -------------------------------------------------------------------
-    local function isBlacklisted(name)
-        local ln = name:lower()
-        for _, bl in ipairs(CRYS_NO_BLACKLIST) do
-            if ln:find(bl, 1, true) then return true end
-        end
-        return false
-    end
-
     function MiningTargetResolver.scoreTarget(inst)
         if not MiningTargetValidator.isValid(inst) then
-            return -999, "invalid"
+            return -999, "invalid", 0
         end
 
-        if isBlacklisted(inst.Name) then return -999, "blacklisted-name" end
-        local par = inst.Parent
-        while par and par ~= workspace do
-            if isBlacklisted(par.Name) then return -999, "blacklisted-ancestor" end
-            par = par.Parent
-        end
+        local semScore = 0
+        local semReason = "none"
 
-        -- Calculate semantic score
-        local semScore, semReason = getMiningEvidenceScore(inst)
         if inst:IsA("Model") then
-            local count = 0
-            for _, desc in ipairs(inst:GetDescendants()) do
-                if desc:IsA("BasePart") then
-                    count = count + 1
-                    local descScore, descReason = getMiningEvidenceScore(desc)
-                    if descScore > semScore then
-                        semScore = descScore
-                        semReason = "descendant:" .. descReason
-                    end
-                    if count >= 15 then break end
-                end
+            local modelEv = getModelMiningEvidence(inst, nil)
+            -- Model must have direct evidence >= MIN_SEMANTIC_SCORE OR at least 2 strong descendants
+            if modelEv.directScore < MIN_SEMANTIC_SCORE and modelEv.strongDescendantCount < 2 then
+                return -999, "below-semantic-floor", 0
             end
-        end
-
-        -- Require semantic floor
-        if semScore < MIN_SEMANTIC_SCORE then
-            return -999, "below-semantic-floor"
+            semScore = math.max(modelEv.directScore, modelEv.bestDescendantScore)
+            semReason = modelEv.reason
+        else
+            local ev = getMiningEvidence(inst)
+            if ev.score < MIN_SEMANTIC_SCORE then
+                return -999, "below-semantic-floor", 0
+            end
+            semScore = ev.score
+            semReason = ev.reason
         end
 
         local visualScore = 0
@@ -1550,7 +1619,7 @@ do
         if sz.X < 0.35 and sz.Y < 0.35 and sz.Z < 0.35 then sizeScore = sizeScore - 5 end
 
         local finalScore = semScore + visualScore + sizeScore
-        return finalScore, semReason
+        return finalScore, semReason, semScore
     end
 
     -------------------------------------------------------------------
@@ -1569,7 +1638,7 @@ do
             local canonical = resolveCanonicalMiningTarget(obj)
             if canonical and not seen[canonical] then
                 seen[canonical] = true
-                local sc, _ = MiningTargetResolver.scoreTarget(canonical)
+                local sc, reason, semScore = MiningTargetResolver.scoreTarget(canonical)
                 if sc >= threshold then
                     _cache[#_cache + 1] = canonical
                 end
@@ -1591,10 +1660,10 @@ do
             MiningTargetResolver.refreshCache()
         end
 
-        local best, bestScore, bestDist, bestReason = nil, -999, math.huge, "none"
+        local best, bestScore, bestDist, bestReason, bestSemScore = nil, -999, math.huge, "none", 0
         for _, obj in ipairs(_cache) do
             if MiningTargetValidator.isValid(obj) then
-                local sc, reason = MiningTargetResolver.scoreTarget(obj)
+                local sc, reason, semScore = MiningTargetResolver.scoreTarget(obj)
                 if sc >= threshold then
                     local objPos = getTargetPosition(obj)
                     if objPos then
@@ -1603,10 +1672,11 @@ do
                             -- Combine distance and score
                             local combined = sc - (dist / 50)
                             if combined > bestScore then
-                                bestScore  = combined
-                                best       = obj
-                                bestDist   = dist
-                                bestReason = reason
+                                bestScore    = combined
+                                best         = obj
+                                bestDist     = dist
+                                bestReason   = reason
+                                bestSemScore = semScore
                             end
                         end
                     end
@@ -1614,8 +1684,102 @@ do
             end
         end
 
-        return best, bestScore, bestDist, bestReason
+        return best, bestScore, bestDist, bestReason, bestSemScore
     end
+end
+
+---------------------------------------------------------------------------
+-- MINING RESOLVER SELF-TESTS (DEV / Static verification)
+---------------------------------------------------------------------------
+local RUN_MINING_SELF_TESTS = false
+
+local function runMiningResolverSelfTests()
+    local testPassed = 0
+    local testTotal  = 5
+
+    local testFolder = Instance.new("Folder")
+    testFolder.Name = "_MiningResolverTests"
+    testFolder.Parent = workspace
+
+    -- TEST A: Building Model with single child Part tagged Ore -> Canonical must be the child Part
+    local buildingModel = Instance.new("Model", testFolder)
+    buildingModel.Name = "Building"
+    local wallPart = Instance.new("Part", buildingModel)
+    wallPart.Name = "Wall"
+    local orePartA = Instance.new("Part", buildingModel)
+    orePartA.Name = "CrystalOre"
+    pcall(function() CS:AddTag(orePartA, "Ore") end)
+    local canA = resolveCanonicalMiningTarget(orePartA)
+    if canA == orePartA then
+        testPassed = testPassed + 1
+    else
+        WARN("SELF_TEST", "TEST A failed: expected CrystalOre Part, got " .. tostring(canA and canA.Name))
+    end
+
+    -- TEST B: DecorationModel with NeonPart and no mining semantics -> Expected nil / rejected
+    local decorModel = Instance.new("Model", testFolder)
+    decorModel.Name = "DecorModel"
+    local neonPart = Instance.new("Part", decorModel)
+    neonPart.Name = "NeonLamp"
+    neonPart.Material = Enum.Material.Neon
+    local canB = resolveCanonicalMiningTarget(decorModel)
+    local canBPart = resolveCanonicalMiningTarget(neonPart)
+    if canB == nil and canBPart == nil then
+        testPassed = testPassed + 1
+    else
+        WARN("SELF_TEST", "TEST B failed: expected nil for generic Neon decoration")
+    end
+
+    -- TEST C: CrystalNode with TWO tagged ore children -> Expected CrystalNode Model
+    local crystalNode = Instance.new("Model", testFolder)
+    crystalNode.Name = "CrystalNode"
+    local oreChild1 = Instance.new("Part", crystalNode)
+    oreChild1.Name = "OreA"
+    pcall(function() CS:AddTag(oreChild1, "Ore") end)
+    local oreChild2 = Instance.new("Part", crystalNode)
+    oreChild2.Name = "OreB"
+    pcall(function() CS:AddTag(oreChild2, "Ore") end)
+    local canC = resolveCanonicalMiningTarget(oreChild1)
+    local canCModel = resolveCanonicalMiningTarget(crystalNode)
+    if canC == crystalNode and canCModel == crystalNode then
+        testPassed = testPassed + 1
+    else
+        WARN("SELF_TEST", "TEST C failed: expected CrystalNode Model")
+    end
+
+    -- TEST D: Model itself has IsOre=true -> Expected Model
+    local oreModel = Instance.new("Model", testFolder)
+    oreModel.Name = "Rock"
+    oreModel:SetAttribute("IsOre", true)
+    local subPart = Instance.new("Part", oreModel)
+    subPart.Name = "RockPart"
+    local canD = resolveCanonicalMiningTarget(subPart)
+    local canDModel = resolveCanonicalMiningTarget(oreModel)
+    if canD == oreModel and canDModel == oreModel then
+        testPassed = testPassed + 1
+    else
+        WARN("SELF_TEST", "TEST D failed: expected Rock Model")
+    end
+
+    -- TEST E: GroundOre with tag Ore -> Expected accepted despite "ground" substring
+    local groundOre = Instance.new("Part", testFolder)
+    groundOre.Name = "GroundOre"
+    pcall(function() CS:AddTag(groundOre, "Ore") end)
+    local canE = resolveCanonicalMiningTarget(groundOre)
+    local scE, _ = MiningTargetResolver.scoreTarget(groundOre)
+    if canE == groundOre and scE >= CFG.mining.scoreThreshold then
+        testPassed = testPassed + 1
+    else
+        WARN("SELF_TEST", "TEST E failed: expected GroundOre accepted with tag Ore")
+    end
+
+    pcall(function() testFolder:Destroy() end)
+    LOG("SELF_TEST", string.format("Mining resolver self-tests: %d/%d passed", testPassed, testTotal))
+    return testPassed == testTotal
+end
+
+if RUN_MINING_SELF_TESTS then
+    pcall(runMiningResolverSelfTests)
 end
 
 ---------------------------------------------------------------------------
@@ -2071,7 +2235,7 @@ do
                     else
                         -- Scan for target
                         setState(STATES.SCAN)
-                        local target, score, dist, reason = MiningTargetResolver.findBest(myPos)
+                        local target, score, dist, reason, semScore = MiningTargetResolver.findBest(myPos)
 
                         if not target then
                             setState(STATES.IDLE)
@@ -2090,8 +2254,8 @@ do
                         _failCount     = 0
                         _hitCycles     = 0
                         setState(STATES.TARGET_SELECTED)
-                        LOG("MINE", string.format("Target: %s (%s) | score=%.1f dist=%.1f reason=%s",
-                            target.Name, target.ClassName, score, dist, reason))
+                        LOG("MINE", string.format("Target=%s Class=%s Canonical=%s Reason=%s Semantic=%.1f Final=%.1f",
+                            target.Name, target.ClassName, target:IsA("Model") and "Model" or "Part", reason, semScore or 0, score))
                     end
 
                     local crystal = _currentTarget

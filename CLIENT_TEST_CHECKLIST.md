@@ -56,13 +56,17 @@ This document details the manual test procedures to validate the client system i
   - Verify state shows `SCAN` / `IDLE` waiting without error loops.
 - [ ] **Child Part Tagged Ore Inside Generic Model (Case A)**
   - Place a child `Part` tagged `Ore` (or with `IsOre=true`) inside a generic untagged Model (e.g. `Model "Building"`).
-  - Verify strong child evidence is **NOT** lost and child Part remains the selected target.
+  - Verify child Part is selected as canonical target (not the parent `Building` Model).
+  - Verify strong child evidence is **NOT** lost.
 - [ ] **Generic Model Containing Neon Decorative Parts (Case B)**
   - Place a generic decoration Model with `Neon` parts but no semantic mining tags/attributes/names.
   - Verify it is **NOT** selected as a mining target (rejected by `MIN_SEMANTIC_SCORE` floor).
-- [ ] **Model with Mining Evidence on Descendant (Case C)**
-  - Place a `Model` where descendants provide aggregate mining evidence (e.g. `Model "CrystalNode"` with child ore parts).
+- [ ] **Model with Multiple Strong Resource Descendants (Case C)**
+  - Place a `Model "CrystalNode"` containing TWO tagged ore child parts (`OreA`, `OreB`).
   - Verify the canonical `Model` is selected once (globally deduplicated, child parts not added as separate duplicate targets).
+- [ ] **GroundOre with Tag Ore (Blacklist Override)**
+  - Place a Part named `GroundOre` with `CollectionService` tag `Ore`.
+  - Verify strong tag overrides generic `ground` blacklist substring and part is accepted as a valid mining candidate.
 - [ ] **Path Blocked Exceeding Max Recomputes (Case D)**
   - Block character path with dynamic obstacles continuously.
   - Verify `Path.Blocked` recomputes up to exact limit `maxPathRecomputes` (3) and logs `"Path.Blocked — recomputing (1/3)"`, `(2/3)`, `(3/3)`, then logs `"Path blocked — recompute limit reached"` and returns `"blocked"`.
