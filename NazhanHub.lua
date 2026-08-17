@@ -1,13 +1,6 @@
 if shared.NH_v9 then pcall(shared.NH_v9.kill) end
 
-local M = { c = {}, on = true }
-function M.kill()
-	M.on = false
-	for _, v in ipairs(M.c) do pcall(function() v:Disconnect() end) end
-	table.clear(M.c)
-end
-shared.NH_v9 = M
-
+-- ── Forward Declarations & References ────────────────
 local Players = game:GetService("Players")
 local RS      = game:GetService("RunService")
 local VIM     = game:GetService("VirtualInputManager")
@@ -58,12 +51,11 @@ local BITE_WAIT  = 15.0
 local RECAST_DLY = 1.0
 
 local CFG = {
-	timeJitter   = true,
-	coordJitter  = true,
-	pathJitter   = true,
+	timeJitter   = false,
+	coordJitter  = false,
+	pathJitter   = false,
 	fatigueBreak = true,
-	mouseAFK     = true,
-	adminGuard   = true,
+	mouseAFK     = false,
 	smoothMove   = true,
 }
 
@@ -104,6 +96,58 @@ local _warn = warn
 local function lg(s) _warn(s); if consoleOn then _clog(tostring(s)) end end
 local function safe(fn) xpcall(fn, function(e) _warn("[ERR] "..tostring(e)) end) end
 
+local function setJumpSuppressed(suppressed)
+	pcall(function()
+		local ch = me.Character
+		local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+		if hum then
+			hum:SetStateEnabled(Enum.HumanoidStateType.Jumping, not suppressed)
+		end
+	end)
+end
+
+local function cleanupCharacterState()
+	isSpace = false
+	isCasting = false
+	pcall(function()
+		VIM:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
+		VIM:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game)
+	end)
+	setJumpSuppressed(false)
+	pcall(function()
+		local ch = me.Character
+		local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+		if hum then
+			hum.WalkSpeed = 16
+		end
+	end)
+end
+
+-- ── Forward declarations ─────────────────────────────
+local gui
+local doResetFish
+local mineRoutine
+local updateRod
+
+local M = { c = {}, on = true }
+function M.kill()
+	M.on = false
+	mode = "OFF"
+	castSess = castSess + 1
+	isSpace = false
+	miningLocked = false
+	currentTarget = nil
+	cleanupCharacterState()
+
+	for _, v in ipairs(M.c) do pcall(function() v:Disconnect() end) end
+	table.clear(M.c)
+
+	pcall(function()
+		if gui and gui.Parent then gui:Destroy() end
+	end)
+end
+shared.NH_v9 = M
+
 pcall(function()
 	for _, n in ipairs({"NH_v9_GUI","AppleFarmUI","IH_v5"}) do
 		local a = game:GetService("CoreGui"):FindFirstChild(n)
@@ -115,9 +159,9 @@ pcall(function()
 	end
 end)
 
-task.wait(math.random() * 0.18)
+task.wait(0.05)
 
-local gui = Instance.new("ScreenGui")
+gui = Instance.new("ScreenGui")
 gui.Name = "NH_v9_GUI"
 gui.ResetOnSpawn = false
 gui.DisplayOrder = 12
@@ -378,6 +422,7 @@ local function setPhase(ph)
 		}):Play()
 	end
 end
+
 local function setPBar(f)
 	if activePhase <= 0 then return end
 	pbFill.Size = UDim2.new(math.clamp((activePhase-1)*0.25 + f*0.25,0,1), 0, 1, 0)
@@ -434,8 +479,9 @@ rodNameL.TextSize = 12
 
 local rodStatL = mkLbl(fp, "Lure: 100%  |  Progress: 100%", 142, 10, Color3.fromRGB(78,78,92))
 
-local function updateRod()
+updateRod = function()
 	local r = RODS[rodIdx]
+	if not r then return end
 	rodNameL.Text = r.name
 	rodStatL.Text = string.format("Lure: %d%%  |  Progress: %d%%", math.floor(r.lure*100), math.floor(r.prog*100))
 end
@@ -446,12 +492,20 @@ mkSep(fp, 162)
 
 local fishSw = mkToggle(fp, "Fishing System", 168, false, function(on)
 	if on then
-		if mode=="MINE" then mode="OFF" end
+		if mode=="MINE" then
+			mode="OFF"
+			mStatL.Text="Status: Idle"
+			miningLocked=false
+			setJumpSuppressed(false)
+		end
 		mode="FISH"; fishState="IDLE"; idleAt=os.clock()
 		fStatL.Text="Status: Starting"
 	else
-		mode="OFF"; isSpace=false
+		mode="OFF"
+		castSess=castSess+1
+		isSpace=false
 		pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.Space, false, game) end)
+		setJumpSuppressed(false)
 		fStatL.Text="Status: Idle"; setPhase(0)
 	end
 end)
@@ -554,26 +608,30 @@ mkSep(mp, 170)
 
 local mineSw = mkToggle(mp, "Mining System", 176, false, function(on)
 	if on then
-		if mode=="FISH" then mode="OFF"; setPhase(0); fStatL.Text="Status: Idle" end
+		if mode=="FISH" then
+			mode="OFF"
+			setPhase(0)
+			fStatL.Text="Status: Idle"
+			setJumpSuppressed(false)
+		end
 		mode="MINE"; currentTarget=nil; failCount=0; hitCount=0; miningLocked=false
 		crystalCache={}; cacheAt=0
 		mStatL.Text="Status: Active"
 		if not mineActive then task.spawn(mineRoutine) end
 	else
 		mode="OFF"; mStatL.Text="Status: Idle"; miningLocked=false
+		setJumpSuppressed(false)
 		pcall(function()
-			local h = me.Character and me.Character:FindFirstChildOfClass("Humanoid")
-			if h then h:SetStateEnabled(Enum.HumanoidStateType.Jumping, true) end
 			VIM:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game)
 		end)
 	end
 end)
 
--- ========== SETTINGS PANEL (ScrollingFrame agar tidak overflow) ==========
+-- ========== SETTINGS PANEL ==========
 local stSF = Instance.new("ScrollingFrame", panels["Settings"])
 stSF.Size = UDim2.new(1, 0, 1, 0)
 stSF.BackgroundTransparency = 1
-stSF.CanvasSize = UDim2.new(0,0,0,340)
+stSF.CanvasSize = UDim2.new(0,0,0,260)
 stSF.ScrollBarThickness = 2
 stSF.ScrollBarImageColor3 = Color3.fromRGB(48,48,58)
 stSF.BorderSizePixel = 0
@@ -585,18 +643,10 @@ local function addSet(lbl, key, def)
 	stY = stY + 34
 end
 
-mkLbl(stSF, "Anti-Detection", 12, 10, Color3.fromRGB(76,76,90))
+mkLbl(stSF, "Automation Settings", 12, 10, Color3.fromRGB(76,76,90))
 stY = 32; mkSep(stSF, 30)
-addSet("Timing Randomization", "timeJitter",   true)
-addSet("Click Coord Jitter",   "coordJitter",  true)
-addSet("Path Waypoint Jitter", "pathJitter",   true)
-addSet("Fatigue Break",        "fatigueBreak", true)
-addSet("Anti-AFK Sweep",       "mouseAFK",     true)
-mkSep(stSF, stY); stY=stY+8
-mkLbl(stSF, "Security", stY, 10, Color3.fromRGB(76,76,90))
-stY=stY+20; mkSep(stSF, stY); stY=stY+8
-addSet("Admin / Staff Guard",  "adminGuard",   true)
-addSet("Anti-Fingerprint",     "antiFingerp",  true)
+addSet("Fatigue Break",  "fatigueBreak", true)
+addSet("Anti-AFK Sweep", "mouseAFK",     false)
 stSF.CanvasSize = UDim2.new(0,0,0, stY+20)
 
 -- ========== CONSOLE PANEL ==========
@@ -677,28 +727,123 @@ local function trulyVis(obj)
 	return true
 end
 
-local function findTool(lst)
-	local ch = me.Character; local bp = me.Backpack
-	if ch then
-		for _,n in ipairs(lst) do local t=ch:FindFirstChild(n); if t and t:IsA("Tool") then return t,"char" end end
-	end
-	for _,n in ipairs(lst) do local t=bp:FindFirstChild(n); if t then return t,"bp" end end
-	if ch then local t=ch:FindFirstChildWhichIsA("Tool"); if t then return t,"char" end end
-	return bp:FindFirstChildWhichIsA("Tool"),"bp"
+local function normalizeToolName(name)
+	return tostring(name or ""):lower():gsub("%s+", "")
 end
 
-local function equipTool(lst)
-	local ch = me.Character; if not ch then return nil end
-	local hum = ch:FindFirstChildOfClass("Humanoid"); if not hum then return nil end
-	local eq = ch:FindFirstChildWhichIsA("Tool")
-	for _,n in ipairs(lst) do if eq and eq.Name:lower():find(n:lower()) then return eq end end
-	local t, loc = findTool(lst)
-	if t and loc=="bp" then
-		pcall(function() hum:EquipTool(t) end)
-		task.wait(0.55)
-		return ch:FindFirstChildWhichIsA("Tool")
+local function toolMatches(tool, names)
+	if not tool or not tool:IsA("Tool") then
+		return false
 	end
-	return eq
+
+	local tn = normalizeToolName(tool.Name)
+
+	for _, name in ipairs(names) do
+		local nn = normalizeToolName(name)
+		if tn == nn or tn:find(nn, 1, true) then
+			return true
+		end
+	end
+
+	return false
+end
+
+local function isKnownRod(tool)
+	if toolMatches(tool, FISH_TOOLS) then
+		return true
+	end
+
+	if not tool or not tool:IsA("Tool") then
+		return false
+	end
+
+	local tn = normalizeToolName(tool.Name)
+
+	for _, rod in ipairs(RODS) do
+		if tn == normalizeToolName(rod.name) then
+			return true
+		end
+	end
+
+	return false
+end
+
+local function syncRodProfile(tool)
+	if not tool then return end
+	local tn = normalizeToolName(tool.Name)
+	for i, rod in ipairs(RODS) do
+		if tn == normalizeToolName(rod.name) then
+			rodIdx = i
+			if updateRod then updateRod() end
+			return
+		end
+	end
+end
+
+local function findTool(modeType)
+	local ch = me.Character
+	local bp = me:FindFirstChild("Backpack")
+
+	if modeType == "FISH" then
+		if ch then
+			for _, item in ipairs(ch:GetChildren()) do
+				if isKnownRod(item) then
+					syncRodProfile(item)
+					return item, "char"
+				end
+			end
+		end
+		if bp then
+			for _, item in ipairs(bp:GetChildren()) do
+				if isKnownRod(item) then
+					return item, "bp"
+				end
+			end
+		end
+	elseif modeType == "MINE" then
+		if ch then
+			for _, item in ipairs(ch:GetChildren()) do
+				if toolMatches(item, MINE_TOOLS) then
+					return item, "char"
+				end
+			end
+		end
+		if bp then
+			for _, item in ipairs(bp:GetChildren()) do
+				if toolMatches(item, MINE_TOOLS) then
+					return item, "bp"
+				end
+			end
+		end
+	end
+
+	return nil, nil
+end
+
+local function equipTool(modeType)
+	local ch = me.Character
+	if not ch then return nil end
+	local hum = ch:FindFirstChildOfClass("Humanoid")
+	if not hum then return nil end
+
+	local tool, loc = findTool(modeType)
+	if not tool then return nil end
+
+	if loc == "char" then
+		return tool
+	end
+
+	local ok = pcall(function() hum:EquipTool(tool) end)
+	if ok then
+		task.wait(0.35)
+		local equippedTool, eqLoc = findTool(modeType)
+		if eqLoc == "char" then
+			if modeType == "FISH" then syncRodProfile(equippedTool) end
+			return equippedTool
+		end
+	end
+
+	return nil
 end
 
 local function jT(base, p) if not CFG.timeJitter then return base end; return base*(1+(math.random()*2-1)*(p or 0.12)) end
@@ -720,8 +865,10 @@ task.spawn(function()
 end)
 
 local afkC = me.Idled:Connect(function()
+	if not CFG.mouseAFK then return end
 	pcall(function()
 		local cam = workspace.CurrentCamera
+		if not cam then return end
 		VU:Button2Down(Vector2.new(0,0), cam.CFrame)
 		task.wait(0.12)
 		VU:Button2Up(Vector2.new(0,0), cam.CFrame)
@@ -744,48 +891,25 @@ local function checkFatigue(statLbl)
 	statLbl.Text = prev
 end
 
--- ========== ADMIN DETECTION ==========
-local STAFF_GRP = 1200769
-local ADM_PATS  = {"moderator","roblox_adm","rbxadmin","staffmod","gamemaster","game_master"}
-
-local function checkAdmin(p)
-	if p==me or not p.Parent or not CFG.adminGuard then return end
-	task.wait(2.5)
-	if not p or not p.Parent then return end
-	local isA = false
-	pcall(function() isA = isA or p:IsInGroup(STAFF_GRP) end)
-	if not isA then
-		local ln = (p.Name..p.DisplayName):lower()
-		for _,pat in ipairs(ADM_PATS) do if ln:find(pat) then isA=true; break end end
-	end
-	if not isA then
-		pcall(function()
-			if game.CreatorType==Enum.CreatorType.Group then
-				if p:GetRankInGroup(game.CreatorId)>=200 then isA=true end
-			end
-		end)
-	end
-	if isA then
-		mode="OFF"; isSpace=false
-		pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.Space, false, game) end)
-		pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game) end)
-		task.wait(0.8); me:Kick("Disconnected.")
-	end
-end
-
-for _,p in ipairs(Players:GetPlayers()) do task.spawn(checkAdmin,p) end
-local admC = Players.PlayerAdded:Connect(function(p) task.spawn(checkAdmin,p) end)
-table.insert(M.c, admC)
-
 -- ========== FISHING ENGINE ==========
-local function doResetFish()
-	fishState="IDLE"; isSpace=false; isCasting=false; successDone=false
-	mgEverSeen=false; mgStarted=false; wBar=nil; rBar=nil
-	lastScan=0; lastWC=nil; wVel=0; mgLastSeen=0
-	castSess=castSess+1; idleAt=os.clock()
+doResetFish = function()
+	castSess = castSess + 1
+	fishState = "IDLE"
+	isSpace = false
+	isCasting = false
+	successDone = false
+	mgEverSeen = false
+	mgStarted = false
+	mgLastSeen = 0
+	wBar = nil
+	rBar = nil
+	lastScan = 0
+	lastWC = nil
+	wVel = 0
+	idleAt = os.clock()
 	pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.Space, false, game) end)
 	setPhase(0)
-	fStatL.Text="Status: Idle"
+	fStatL.Text = "Status: Idle"
 end
 
 rstBtn.MouseButton1Click:Connect(function()
@@ -867,7 +991,10 @@ end
 local hbLast = 0
 local hbC = RS.Heartbeat:Connect(function()
 	if not M.on then return end
-	if mode~="FISH" then if isSpace then setSpace(false,true) end; return end
+	if mode~="FISH" then
+		if isSpace then setSpace(false,true) end
+		return
+	end
 	local now = os.clock()
 	if now-hbLast < 0.016 then return end
 	hbLast = now
@@ -890,7 +1017,12 @@ local hbC = RS.Heartbeat:Connect(function()
 		local el = now-mgStart
 		local timeout = 11+rod.prog*3.2
 		setPBar(math.clamp(el/timeout,0,1))
-		if el>=timeout then setSpace(false,true); doSuccess("timeout"); return end
+		if el>=timeout then
+			setSpace(false,true)
+			lg("[FISH] Minigame timeout")
+			doResetFish()
+			return
+		end
 		local wb,rb = getBars()
 		if wb and rb and trulyVis(wb) and trulyVis(rb) then
 			mgEverSeen=true; mgLastSeen=now
@@ -927,9 +1059,10 @@ local hbC = RS.Heartbeat:Connect(function()
 			end
 			fStatL.Text=string.format("Status: Playing (%.0fs)",el)
 		else
-			if mgEverSeen then
-				if mgLastSeen>0 and (now-mgLastSeen)>=0.20 then setSpace(false,true); doSuccess("bar-gone") end
-			else
+			if mgStarted and mgEverSeen and mgLastSeen>0 and not successDone and (now-mgLastSeen)>=0.20 then
+				setSpace(false,true)
+				doSuccess("bar-gone")
+			elseif not mgEverSeen then
 				local beat = math.floor((now-mgStart)*3.0)%2==0
 				setSpace(beat)
 				fStatL.Text=string.format("Status: Sync (%.0fs)",el)
@@ -943,44 +1076,44 @@ table.insert(M.c, hbC)
 task.spawn(function()
 	while M.on do
 		task.wait(0.15)
-		if not M.on or mode~="FISH" then continue end
-		safe(function()
-			local ch = me.Character; if not ch then return end
-			local hum = ch:FindFirstChildOfClass("Humanoid"); if not hum then return end
-			if hum:GetStateEnabled(Enum.HumanoidStateType.Jumping) then
-				hum:SetStateEnabled(Enum.HumanoidStateType.Jumping,false)
-			end
-			local tool = equipTool(FISH_TOOLS)
-			if not tool then fStatL.Text="Status: No rod"; return end
-			if fishState=="IDLE" and not isCasting then
-				isCasting=true; castSess=castSess+1; local sess=castSess
-				task.spawn(function()
-					if not M.on or mode~="FISH" or castSess~=sess then isCasting=false; return end
-					local cam = workspace.CurrentCamera; if not cam then isCasting=false; return end
-					local rod = RODS[rodIdx]
-					local ctr = jV(cam.ViewportSize/2)
-					fishState="CASTING"; setPhase(1); setPBar(0)
-					fStatL.Text="Status: Casting"
-					pcall(function() tool:Activate() end)
-					pcall(function() VU:Button1Down(ctr, cam.CFrame) end)
-					local dur = jT(CAST_HOLD/math.max(1,math.sqrt(rod.lure)*0.85),0.1)
-					local t0 = os.clock()
-					while os.clock()-t0<dur do
-						task.wait(0.04)
-						if mode~="FISH" or not M.on or castSess~=sess then
-							pcall(function() VU:Button1Up(ctr,cam.CFrame) end); isCasting=false; return
+		if M.on and mode=="FISH" then
+			safe(function()
+				local ch = me.Character; if not ch then return end
+				local hum = ch:FindFirstChildOfClass("Humanoid"); if not hum then return end
+				setJumpSuppressed(true)
+
+				local tool = equipTool("FISH")
+				if not tool then fStatL.Text="Status: No rod"; return end
+				if fishState=="IDLE" and not isCasting then
+					isCasting=true; castSess=castSess+1; local sess=castSess
+					task.spawn(function()
+						if not M.on or mode~="FISH" or castSess~=sess then isCasting=false; return end
+						local cam = workspace.CurrentCamera; if not cam then isCasting=false; return end
+						local rod = RODS[rodIdx]
+						local ctr = jV(cam.ViewportSize/2)
+						fishState="CASTING"; setPhase(1); setPBar(0)
+						fStatL.Text="Status: Casting"
+						pcall(function() tool:Activate() end)
+						pcall(function() VU:Button1Down(ctr, cam.CFrame) end)
+						local dur = jT(CAST_HOLD/math.max(1,math.sqrt(rod.lure)*0.85),0.1)
+						local t0 = os.clock()
+						while os.clock()-t0<dur do
+							task.wait(0.04)
+							if mode~="FISH" or not M.on or castSess~=sess then
+								pcall(function() VU:Button1Up(ctr,cam.CFrame) end); isCasting=false; return
+							end
+							setPBar((os.clock()-t0)/dur)
 						end
-						setPBar((os.clock()-t0)/dur)
-					end
-					pcall(function() VU:Button1Up(ctr, cam.CFrame) end)
-					setPBar(1); task.wait(jT(0.14,0.08))
-					if mode~="FISH" or not M.on or castSess~=sess then isCasting=false; return end
-					fishState="WAITING"; biteStart=os.clock()
-					setPhase(2); setPBar(0); fStatL.Text="Status: Waiting"
-					isCasting=false
-				end)
-			end
-		end)
+						pcall(function() VU:Button1Up(ctr, cam.CFrame) end)
+						setPBar(1); task.wait(jT(0.14,0.08))
+						if mode~="FISH" or not M.on or castSess~=sess then isCasting=false; return end
+						fishState="WAITING"; biteStart=os.clock()
+						setPhase(2); setPBar(0); fStatL.Text="Status: Waiting"
+						isCasting=false
+					end)
+				end
+			end)
+		end
 	end
 end)
 
@@ -988,17 +1121,18 @@ end)
 task.spawn(function()
 	while M.on do
 		task.wait(4)
-		if not M.on or mode~="FISH" then continue end
-		local now = os.clock()
-		if fishState=="IDLE" and not isCasting and (now-idleAt)>12 then
-			lg("[FISH] Watchdog: idle too long, forcing cast")
-			doResetFish()
-		elseif fishState=="WAITING" and (now-biteStart)>(BITE_WAIT+8) then
-			lg("[FISH] Watchdog: waiting timeout, reset")
-			doResetFish()
-		elseif fishState=="CASTING" and not isCasting and (now-idleAt)>10 then
-			lg("[FISH] Watchdog: cast stuck, reset")
-			doResetFish()
+		if M.on and mode=="FISH" then
+			local now = os.clock()
+			if fishState=="IDLE" and not isCasting and (now-idleAt)>12 then
+				lg("[FISH] Watchdog: idle too long, forcing cast")
+				doResetFish()
+			elseif fishState=="WAITING" and (now-biteStart)>(BITE_WAIT+8) then
+				lg("[FISH] Watchdog: waiting timeout, reset")
+				doResetFish()
+			elseif fishState=="CASTING" and not isCasting and (now-idleAt)>10 then
+				lg("[FISH] Watchdog: cast stuck, reset")
+				doResetFish()
+			end
 		end
 	end
 end)
@@ -1033,12 +1167,13 @@ end
 task.spawn(function()
 	while M.on do
 		task.wait(3)
-		if not M.on or mode~="MINE" then continue end
-		local nc={}
-		for _,obj in pairs(workspace:GetDescendants()) do
-			if scorePart(obj)>=6 then nc[#nc+1]=obj end
+		if M.on and mode=="MINE" then
+			local nc={}
+			for _,obj in pairs(workspace:GetDescendants()) do
+				if scorePart(obj)>=6 then nc[#nc+1]=obj end
+			end
+			crystalCache=nc; cacheAt=os.clock()
 		end
-		crystalCache=nc; cacheAt=os.clock()
 	end
 end)
 
@@ -1048,9 +1183,8 @@ local function isOccupied(crystal)
 			local root=p.Character.PrimaryPart
 			if root and (root.Position-crystal.Position).Magnitude<10 then
 				local t=p.Character:FindFirstChildOfClass("Tool")
-				if t then
-					local tn=t.Name:lower()
-					for _,mn in ipairs(MINE_TOOLS) do if tn:find(mn:lower(),1,true) then return true end end
+				if t and toolMatches(t, MINE_TOOLS) then
+					return true
 				end
 			end
 		end
@@ -1095,11 +1229,11 @@ local function findBestCrystal()
 end
 
 local function groundRay(pos, ign)
-	local rp=RaycastParams.new()
-	rp.FilterType=Enum.RaycastFilterType.Blacklist
-	rp.FilterDescendantsInstances=ign or {}
-	rp.IgnoreWater=false
-	return workspace:Raycast(pos+Vector3.new(0,16,0), Vector3.new(0,-56,0), rp)
+	local rp = RaycastParams.new()
+	rp.FilterType = Enum.RaycastFilterType.Exclude
+	rp.FilterDescendantsInstances = ign or {}
+	rp.IgnoreWater = false
+	return workspace:Raycast(pos + Vector3.new(0, 16, 0), Vector3.new(0, -56, 0), rp)
 end
 
 local function getStandPoint(crystal)
@@ -1147,98 +1281,111 @@ local function doJump(hum)
 end
 
 local function moveToPos(hum, targetPos, targetPart)
-	local ch=me.Character; if not ch or not ch.PrimaryPart then return false end
-	pcall(function() VIM:SendKeyEvent(true, Enum.KeyCode.LeftShift, false, game) end)
-	local path=PFS:CreatePath({
-		AgentRadius=1.8, AgentHeight=5.0,
-		AgentCanJump=true, AgentCanClimb=false,
-		WaypointSpacing=CFG.smoothMove and 6 or 3,
-		Costs={Water=8},
-	})
-	local ok=pcall(function() path:ComputeAsync(ch.PrimaryPart.Position, targetPos) end)
-	local wps
-	if ok and path.Status==Enum.PathStatus.Success then wps=path:GetWaypoints()
-	else wps={{Position=targetPos,Action=Enum.PathWaypointAction.Walk}} end
+	local ch = me.Character
+	if not ch or not ch.PrimaryPart then return false end
 
-	local origSp=hum.WalkSpeed
-	hum.WalkSpeed=WALK_SPD+(CFG.timeJitter and math.random(-1,2) or 0)
-
-	local lastPos=ch.PrimaryPart.Position
-	local stuckT=0
-	local arrived=false
-
-	-- variasi lompatan: 1-3 titik acak di sepanjang jalur, tidak di awal/akhir
-	local jPts={}
-	if #wps>4 then
-		local n=math.random(1,math.min(3,math.floor(#wps/2)))
-		local used={}
-		for i=1,n do
-			local tries=0
-			repeat
-				local idx=math.random(2,#wps-2)
-				if not used[idx] then used[idx]=true; jPts[idx]=true; break end
-				tries=tries+1
-			until tries>10
+	local origSp = hum.WalkSpeed
+	local success, arrived = pcall(function()
+		pcall(function() VIM:SendKeyEvent(true, Enum.KeyCode.LeftShift, false, game) end)
+		local path = PFS:CreatePath({
+			AgentRadius = 1.8,
+			AgentHeight = 5.0,
+			AgentCanJump = true,
+			AgentCanClimb = false,
+			WaypointSpacing = CFG.smoothMove and 6 or 3,
+			Costs = { Water = 8 },
+		})
+		local ok = pcall(function() path:ComputeAsync(ch.PrimaryPart.Position, targetPos) end)
+		local wps
+		if ok and path.Status == Enum.PathStatus.Success then
+			wps = path:GetWaypoints()
+		else
+			wps = { { Position = targetPos, Action = Enum.PathWaypointAction.Walk } }
 		end
-	end
 
-	for i,wp in ipairs(wps) do
-		if mode~="MINE" or not M.on then break end
-		if targetPart and not targetPart.Parent then break end
-		if wp.Action==Enum.PathWaypointAction.Jump then doJump(hum) end
+		hum.WalkSpeed = WALK_SPD + (CFG.timeJitter and math.random(-1, 2) or 0)
 
-		if jPts[i] then
-			doJump(hum)
-			-- sedikit belok saat jump agar terlihat natural
-			if math.random()<0.45 then
-				local sideAngle = (math.random()-0.5)*0.8
-				local dir = (targetPos-ch.PrimaryPart.Position)
-				local flat = Vector3.new(dir.X,0,dir.Z)
-				if flat.Magnitude>0.2 then
-					local perp = Vector3.new(-flat.Z,0,flat.X).Unit
-					hum:MoveTo(wp.Position + perp*sideAngle)
-					task.wait(0.06)
-				end
+		local lastPos = ch.PrimaryPart.Position
+		local stuckT = 0
+		local isArr = false
+
+		local jPts = {}
+		if #wps > 4 then
+			local n = math.random(1, math.min(3, math.floor(#wps / 2)))
+			local used = {}
+			for i = 1, n do
+				local tries = 0
+				repeat
+					local idx = math.random(2, #wps - 2)
+					if not used[idx] then used[idx] = true; jPts[idx] = true; break end
+					tries = tries + 1
+				until tries > 10
 			end
 		end
 
-		local step=wp.Position
-		if CFG.pathJitter and i<#wps then
-			step=wp.Position+Vector3.new((math.random()-0.5)*0.5,0,(math.random()-0.5)*0.5)
-		end
+		for i, wp in ipairs(wps) do
+			if mode ~= "MINE" or not M.on then break end
+			if targetPart and not targetPart.Parent then break end
+			if wp.Action == Enum.PathWaypointAction.Jump then doJump(hum) end
 
-		hum:MoveTo(step)
-		local t0=os.clock()
-		while mode=="MINE" and M.on and os.clock()-t0<5.5 do
-			task.wait(CFG.smoothMove and 0.06 or 0.12)
-			if not ch.PrimaryPart then break end
-			local cur=ch.PrimaryPart.Position
-			if targetPart and targetPart.Parent then
-				local dc=(cur-targetPart.Position).Magnitude
-				local cw=math.max(targetPart.Size.X,targetPart.Size.Z)
-				if dc<=(cw*0.5+STOP_DIST+0.3) then arrived=true; break end
-			end
-			local reach=(CFG.smoothMove and i<#wps) and 5.0 or 1.2
-			if (cur-wp.Position).Magnitude<=reach then break end
-			if (cur-targetPos).Magnitude<=1.2 then arrived=true; break end
-			if (cur-lastPos).Magnitude<0.17 then
-				stuckT=stuckT+(CFG.smoothMove and 0.06 or 0.12)
-				if stuckT>1.2 then
-					doJump(hum)
-					local dir=targetPos-cur
-					hum:MoveTo(cur+(dir.Magnitude>0.1 and dir.Unit or Vector3.new(1,0,0))*4.5)
-					task.wait(0.3); break
+			if jPts[i] then
+				doJump(hum)
+				if math.random() < 0.45 then
+					local sideAngle = (math.random() - 0.5) * 0.8
+					local dir = (targetPos - ch.PrimaryPart.Position)
+					local flat = Vector3.new(dir.X, 0, dir.Z)
+					if flat.Magnitude > 0.2 then
+						local perp = Vector3.new(-flat.Z, 0, flat.X).Unit
+						hum:MoveTo(wp.Position + perp * sideAngle)
+						task.wait(0.06)
+					end
 				end
-			else stuckT=0; lastPos=cur end
-		end
-		if arrived then break end
-	end
+			end
 
-	hum.WalkSpeed=origSp
+			local step = wp.Position
+			if CFG.pathJitter and i < #wps then
+				step = wp.Position + Vector3.new((math.random() - 0.5) * 0.5, 0, (math.random() - 0.5) * 0.5)
+			end
+
+			hum:MoveTo(step)
+			local t0 = os.clock()
+			while mode == "MINE" and M.on and os.clock() - t0 < 5.5 do
+				task.wait(CFG.smoothMove and 0.06 or 0.12)
+				if not ch.PrimaryPart then break end
+				local cur = ch.PrimaryPart.Position
+				if targetPart and targetPart.Parent then
+					local dc = (cur - targetPart.Position).Magnitude
+					local cw = math.max(targetPart.Size.X, targetPart.Size.Z)
+					if dc <= (cw * 0.5 + STOP_DIST + 0.3) then isArr = true; break end
+				end
+				local reach = (CFG.smoothMove and i < #wps) and 5.0 or 1.2
+				if (cur - wp.Position).Magnitude <= reach then break end
+				if (cur - targetPos).Magnitude <= 1.2 then isArr = true; break end
+				if (cur - lastPos).Magnitude < 0.17 then
+					stuckT = stuckT + (CFG.smoothMove and 0.06 or 0.12)
+					if stuckT > 1.2 then
+						doJump(hum)
+						local dir = targetPos - cur
+						hum:MoveTo(cur + (dir.Magnitude > 0.1 and dir.Unit or Vector3.new(1, 0, 0)) * 4.5)
+						task.wait(0.3)
+						break
+					end
+				else
+					stuckT = 0
+					lastPos = cur
+				end
+			end
+			if isArr then break end
+		end
+		return isArr
+	end)
+
+	pcall(function() hum.WalkSpeed = origSp end)
 	pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game) end)
-	if arrived then return true end
+
+	if success and arrived then return true end
 	if not ch.PrimaryPart then return false end
-	return (ch.PrimaryPart.Position-targetPos).Magnitude<=2.2
+	return (ch.PrimaryPart.Position - targetPos).Magnitude <= 2.2
 end
 
 local function facePart(part)
@@ -1267,7 +1414,7 @@ function mineRoutine()
 				currentTarget=nil; task.wait(0.3); return
 			end
 
-			local tool=equipTool(MINE_TOOLS)
+			local tool=equipTool("MINE")
 			if not tool then mStatL.Text="Status: No tool"; task.wait(1.5); return end
 
 			local myP=ch.PrimaryPart.Position
@@ -1307,7 +1454,7 @@ function mineRoutine()
 			local sPx,onSc=cam:WorldToScreenPoint(aimPos)
 
 			mStatL.Text="Status: Mining"
-			miningLocked=true  -- kunci target selama swing berlangsung
+			miningLocked=true
 
 			local swings=0
 			for s=1,10 do
@@ -1330,20 +1477,31 @@ function mineRoutine()
 				task.wait(jT(0.25,0.1))
 			end
 
-			miningLocked=false  -- buka lock setelah swing selesai
+			miningLocked = false
 
-			if not crystal.Parent or swings>=9 then
-				mineCount=mineCount+1
-				mCntL.Text="Crystals Mined: "..mineCount
-				mStatL.Text="Status: Active"
-				currentTarget=nil; failCount=0; hitCount=0
+			if not crystal.Parent then
+				mineCount = mineCount + 1
+				mCntL.Text = "Crystals Mined: " .. mineCount
+				mStatL.Text = "Status: Active"
+
+				currentTarget = nil
+				failCount = 0
+				hitCount = 0
+
 				checkFatigue(mStatL)
 			else
-				hitCount=hitCount+1
-				if hitCount>=5 then
-					mineCount=mineCount+1
-					mCntL.Text="Crystals Mined: "..mineCount
-					hitCount=0; currentTarget=nil
+				hitCount = hitCount + 1
+
+				if hitCount >= 5 then
+					lg("[MINE] Target survived repeated mining cycles; retargeting")
+
+					hitCount = 0
+					failCount = failCount + 1
+					currentTarget = nil
+
+					if failCount >= 4 then
+						failCount = 0
+					end
 				end
 			end
 		end)
