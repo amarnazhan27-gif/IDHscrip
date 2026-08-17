@@ -1,11 +1,36 @@
--- ┌──────────────────────────────────────────────────┐
--- │   Nazhan Fish  v2.0  •  by nazhan               │
--- │   auto fishing | custom spot | webhook notif    │
--- └──────────────────────────────────────────────────┘
+--[[
+╔══════════════════════════════════════════════════════════════╗
+║  Nazhan Fish  v3.0  –  Auto Fishing (standalone entry)       ║
+║  Compatible with NasiHub v3.0 shared runtime.                ║
+║  Delegates to NazhanHub.lua when hub is loaded, or runs      ║
+║  standalone using the same FishingController architecture.   ║
+╚══════════════════════════════════════════════════════════════╝
 
+NOTES:
+  - If NazhanHub.lua is already loaded (shared.IDH_CLIENT_RUNTIME exists
+    and has currentMode), this script skips re-initialising the runtime.
+  - Standalone mode provides only Auto Fishing with a minimal UI.
+  - Bar-gone alone does NOT count as success (RESULT_UNCONFIRMED).
+  - Fish counter increments ONLY on SUCCESS_CONFIRMED.
+  - Rod resolver priority:
+      1. Equipped Tool with fishing attributes
+      2. Equipped Tool matching known rod names
+      3. Backpack Tool matching same criteria
+      4. Static fallback name list (UI shows "FALLBACK")
+]]
+
+-- ── If NasiHub v3.0 hub is already running, just activate fishing
+if shared.IDH_CLIENT_RUNTIME and shared.IDH_CLIENT_RUNTIME.alive then
+    shared.IDH_CLIENT_RUNTIME.currentMode = "FISH"
+    print("[autofish] NasiHub v3.0 runtime detected – delegated to hub.")
+    return
+end
+
+-- ── Kill old standalone instance
 if shared._nzh2 then pcall(shared._nzh2.stop) end
+if shared._autofish_v3 then pcall(shared._autofish_v3.stop) end
 
--- ── Services ────────────────────────────────────────
+-- ── Services ─────────────────────────────────────────────────
 local Players = game:GetService("Players")
 local RS      = game:GetService("RunService")
 local VIM     = game:GetService("VirtualInputManager")
@@ -14,1415 +39,935 @@ local TS      = game:GetService("TweenService")
 local HTTP    = game:GetService("HttpService")
 local me      = Players.LocalPlayer
 
--- ── Rod Profiles ────────────────────────────────────
-local RODS = {
-	{ n="Basic Rod",   lure=1.00, prog=1.00 }, { n="Party Rod",   lure=1.30, prog=1.08 },
-	{ n="Shark Rod",   lure=1.57, prog=1.21 }, { n="Piranha Rod", lure=1.84, prog=1.33 },
-	{ n="Thermo Rod",  lure=2.11, prog=1.46 }, { n="Flowers Rod", lure=2.38, prog=1.59 },
-	{ n="Trisula Rod", lure=2.65, prog=1.72 }, { n="Feather Rod", lure=2.92, prog=1.84 },
-	{ n="Wave Rod",    lure=3.19, prog=1.97 }, { n="Duck Rod",    lure=3.46, prog=2.10 },
-	{ n="Planet Rod",  lure=3.73, prog=2.23 }, { n="Earth Rod",   lure=4.00, prog=2.35 },
-	{ n="Volcano Rod", lure=4.27, prog=2.48 },
+-- ── Capability detection ──────────────────────────────────────
+local Capabilities = {
+    fileIO    = type(writefile) == "function" and type(readfile) == "function" and type(isfile) == "function",
+    clipboard = type(setclipboard) == "function",
+    vim       = pcall(function() return VIM.ClassName end),
+    vu        = pcall(function() return VU.ClassName end),
 }
-local rodIdx = 1
 
--- ── Timing & Feature Config ──────────────────────────
+-- ── Rod fallback profiles (FALLBACK source only) ──────────────
+local RODS_FALLBACK = {
+    { name="Basic Rod",   lure=1.00, prog=1.00 },
+    { name="Party Rod",   lure=1.30, prog=1.08 },
+    { name="Shark Rod",   lure=1.57, prog=1.21 },
+    { name="Piranha Rod", lure=1.84, prog=1.33 },
+    { name="Thermo Rod",  lure=2.11, prog=1.46 },
+    { name="Flowers Rod", lure=2.38, prog=1.59 },
+    { name="Trisula Rod", lure=2.65, prog=1.72 },
+    { name="Feather Rod", lure=2.92, prog=1.84 },
+    { name="Wave Rod",    lure=3.19, prog=1.97 },
+    { name="Duck Rod",    lure=3.46, prog=2.10 },
+    { name="Planet Rod",  lure=3.73, prog=2.23 },
+    { name="Earth Rod",   lure=4.00, prog=2.35 },
+    { name="Volcano Rod", lure=4.27, prog=2.48 },
+}
+
+local FISH_TOOL_NAMES = { "fishing rod", "rod", "pancing", "fishingrod" }
+
+-- ── Config ────────────────────────────────────────────────────
 local CFG = {
-	castHold         = 1.8,
-	biteWait         = 15.0,
-	recastDly        = 0.9,
-	jitter           = false,
-	coordJitter      = false,
-	fatigueOn        = true,
-	fatEvery         = 25,
-	fatDur           = 8,
-	antiAFK          = false,
-	watchdog         = true,
-	netAdapt         = true,
-	autoRejoin       = false,
+    fishing = {
+        castHold       = 1.8,
+        biteTimeout    = 15.0,
+        recastDelay    = 0.9,
+        minigameGuard  = 0.20,
+        watchdogIdle   = 14,
+        watchdogWait   = 23,
+        watchdogCast   = 12,
+        scanCooldown   = 0.05,
+        fatigueEvery   = 25,
+        fatigueDur     = 8,
+    },
+    performance = {
+        smooth        = 0.08,
+        slowThreshold = 0.05,
+    },
 }
 
-local FISH_TOOLS = { "Fishing Rod", "Rod", "Pancing", "FishingRod" }
-
--- ── State ───────────────────────────────────────────
-local active      = false
-local fishState   = "IDLE"
-local isSpace     = false
-local lastSpTgl   = 0
-local biteStart   = 0
-local mgStart     = 0
-local mgLastSeen  = 0
-local mgEverSeen  = false
-local mgStarted   = false
-local successDone = false
-local isCasting   = false
-local wBar, rBar  = nil, nil
-local lastScan    = 0
-local lastWC      = nil
-local lastWTime   = os.clock()
-local wVel        = 0
-local castSess    = 0
-local idleAt      = os.clock()
-local fishCount   = 0
-local sessStart   = os.clock()
-local fatCnt      = 0
-local lastAFKPos  = nil
-
--- Performance monitor — rolling average frame time
-local frameAvg    = 0.016
-local frameSmooth = 0.08
+-- ── Performance monitor (frameTime – NOT network lag) ─────────
+local frameTime = 0.016
+local frameSlow = false
 local function updateFrameTime(dt)
-	frameAvg = frameAvg * (1 - frameSmooth) + dt * frameSmooth
-end
-local function frameSlow()
-	return CFG.netAdapt and frameAvg > 0.05
+    frameTime = frameTime * (1 - CFG.performance.smooth) + dt * CFG.performance.smooth
+    frameSlow = frameTime > CFG.performance.slowThreshold
 end
 
--- Discord Webhook
-local webhookURL = ""
-local webhookOn  = false
+-- ── Counters ──────────────────────────────────────────────────
+local fishAttempts  = 0
+local fishConfirmed = 0
+local fishFailed    = 0
+local fishUnknown   = 0
+local sessStart     = os.clock()
 
--- ── Custom Spots ────────────────────────────────────
+-- ── Runtime controller ────────────────────────────────────────
+local _S = { alive = true, connections = {}, active = false }
+_S.stop = function()
+    _S.alive  = false
+    _S.active = false
+    -- Release all tracked connections
+    for _, v in ipairs(_S.connections) do pcall(function() v:Disconnect() end) end
+    table.clear(_S.connections)
+    -- Release Space key
+    if Capabilities.vim then
+        pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.Space, false, game) end)
+    end
+    -- Restore jump
+    pcall(function()
+        local ch  = me.Character
+        local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+        if hum then hum:SetStateEnabled(Enum.HumanoidStateType.Jumping, true) end
+    end)
+    -- Restore original WalkSpeed
+    pcall(function()
+        local ch  = me.Character
+        local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+        if hum and _S._origWalkSpeed then hum.WalkSpeed = _S._origWalkSpeed end
+    end)
+    -- Destroy GUI
+    pcall(function()
+        local old = me.PlayerGui:FindFirstChild("_nzh_fish3")
+        if old then old:Destroy() end
+        local cg = game:GetService("CoreGui"):FindFirstChild("_nzh_fish3")
+        if cg then cg:Destroy() end
+    end)
+end
+_S._origWalkSpeed = nil
+
+shared._nzh2       = _S   -- backward compat
+shared._autofish_v3 = _S
+
+-- ── Fishing state machine ─────────────────────────────────────
+local STATES = {
+    IDLE          = "IDLE",
+    CASTING       = "CASTING",
+    WAITING_BITE  = "WAITING_BITE",
+    REELING       = "REELING",
+    RESULT_PENDING= "RESULT_PENDING",
+    STOPPING      = "STOPPING",
+}
+
+local fishState   = STATES.IDLE
+local generation  = 0    -- incremented on every reset/cast
+local _casting    = false
+local _biteAt     = 0
+local _mgAt       = 0
+local _mgEverSeen = false
+local _mgStarted  = false
+local _mgLastSeen = 0
+local _idleAt     = os.clock()
+local _fatCount   = 0
+
+-- Space key state (centralised)
+local _spaceHeld = false
+local _lastSpTgl = 0
+local function setSpace(v, force)
+    if _spaceHeld == v and not force then return end
+    local now = os.clock()
+    if not force and (now - _lastSpTgl) < 0.03 then return end
+    if Capabilities.vim then
+        pcall(function() VIM:SendKeyEvent(v, Enum.KeyCode.Space, false, game) end)
+    end
+    _spaceHeld = v; _lastSpTgl = now
+end
+
+local function releaseAllInput()
+    if _spaceHeld then
+        if Capabilities.vim then
+            pcall(function() VIM:SendKeyEvent(false, Enum.KeyCode.Space, false, game) end)
+        end
+        _spaceHeld = false
+    end
+end
+
+-- ── Fishing result states ─────────────────────────────────────
+-- UNKNOWN | ACTIVE | SUCCESS_CONFIRMED | TIMEOUT | RESET
+local resultState = "UNKNOWN"
+
+-- ── Character state management ────────────────────────────────
+local _savedWalkSpeed = nil
+local _savedJumpEnabled = true
+
+local function saveCharState(char)
+    local hum = char and char:FindFirstChildOfClass("Humanoid")
+    if not hum then return end
+    _savedWalkSpeed  = hum.WalkSpeed
+    _savedJumpEnabled = hum:GetStateEnabled(Enum.HumanoidStateType.Jumping)
+    _S._origWalkSpeed = _savedWalkSpeed
+end
+
+local function setJumpEnabled(v)
+    pcall(function()
+        local ch  = me.Character
+        local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+        if hum then hum:SetStateEnabled(Enum.HumanoidStateType.Jumping, v) end
+    end)
+end
+
+local function restoreCharState()
+    releaseAllInput()
+    setJumpEnabled(_savedJumpEnabled ~= false)
+    pcall(function()
+        local ch  = me.Character
+        local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+        if hum and _savedWalkSpeed then hum.WalkSpeed = _savedWalkSpeed end
+    end)
+end
+
+-- Save on init
+local char0 = me.Character
+if char0 then saveCharState(char0) end
+
+-- ── Rod resolver ──────────────────────────────────────────────
+local _currentRod = { name="—", lure=1.0, prog=1.0, source="NONE" }
+
+local function normalizeToolName(s)
+    return tostring(s or ""):lower():gsub("%s+", "")
+end
+
+local function isFishingCandidate(tool)
+    if not tool or not tool:IsA("Tool") then return false end
+    local tn = normalizeToolName(tool.Name)
+    -- Priority 1: Tool attributes for fishing semantics
+    if tool:GetAttribute("IsFishingRod") == true
+    or tool:GetAttribute("FishingRod") == true then return true end
+    -- Priority 2: Generic name matching
+    for _, n in ipairs(FISH_TOOL_NAMES) do
+        local nn = normalizeToolName(n)
+        if tn == nn or tn:find(nn, 1, true) then return true end
+    end
+    -- Priority 3: Known fallback rod names
+    for _, r in ipairs(RODS_FALLBACK) do
+        if tn == normalizeToolName(r.name) then return true end
+    end
+    return false
+end
+
+local function syncRodProfile(tool)
+    if not tool then _currentRod = {name="—",lure=1.0,prog=1.0,source="NONE"}; return end
+    -- Try live Tool attributes first
+    local lure = tool:GetAttribute("LureSpeed") or tool:GetAttribute("lureSpeed")
+    local prog = tool:GetAttribute("ProgressSpeed") or tool:GetAttribute("progressSpeed")
+    if lure and prog then
+        _currentRod = {name=tool.Name, lure=lure, prog=prog, source="LIVE"}
+        return
+    end
+    -- Try fallback static profile
+    local tn = normalizeToolName(tool.Name)
+    for _, r in ipairs(RODS_FALLBACK) do
+        if tn == normalizeToolName(r.name) then
+            _currentRod = {name=r.name, lure=r.lure, prog=r.prog, source="FALLBACK"}
+            return
+        end
+    end
+    _currentRod = {name=tool.Name, lure=1.0, prog=1.0, source="UNKNOWN"}
+    warn("[autofish] No rod profile for: " .. tool.Name .. " – using defaults")
+end
+
+local function equipBestRod()
+    local ch  = me.Character
+    if not ch then return nil end
+    local hum = ch:FindFirstChildOfClass("Humanoid")
+    if not hum then return nil end
+
+    -- Already equipped?
+    for _, item in ipairs(ch:GetChildren()) do
+        if isFishingCandidate(item) then
+            syncRodProfile(item)
+            return item
+        end
+    end
+
+    -- Equip from Backpack
+    local bp = me:FindFirstChild("Backpack")
+    if bp then
+        for _, item in ipairs(bp:GetChildren()) do
+            if isFishingCandidate(item) then
+                local ok = pcall(function() hum:EquipTool(item) end)
+                if ok then
+                    task.wait(0.35)
+                    for _, it in ipairs(ch:GetChildren()) do
+                        if isFishingCandidate(it) then
+                            syncRodProfile(it); return it
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return nil
+end
+
+-- ── Fishing GUI resolver / UI adapter ─────────────────────────
+local _wBar = nil
+local _rBar = nil
+local _pBar = nil
+local _lastScan = 0
+
+local function trulyVis(obj)
+    if not obj or typeof(obj) ~= "Instance" then return false end
+    if not obj:IsA("GuiObject") or not obj.Visible then return false end
+    local ok, sz = pcall(function() return obj.AbsoluteSize end)
+    if not ok or sz.X <= 0 or sz.Y <= 0 then return false end
+    local cur = obj.Parent
+    while cur and cur ~= game do
+        if cur:IsA("ScreenGui") then
+            if not cur.Enabled then return false end; break
+        elseif cur:IsA("GuiObject") then
+            if not cur.Visible then return false end
+        end
+        cur = cur.Parent
+    end
+    return true
+end
+
+local function cacheValid()
+    return _wBar and _rBar and _wBar.Parent and _rBar.Parent
+        and trulyVis(_wBar) and trulyVis(_rBar)
+end
+
+local function resolveBars()
+    if cacheValid() then return true end
+    local now = os.clock()
+    local cooldown = frameSlow and 0.12 or CFG.fishing.scanCooldown
+    if now - _lastScan < cooldown then return false end
+    _lastScan = now; _wBar = nil; _rBar = nil; _pBar = nil
+
+    local pg = me:FindFirstChild("PlayerGui")
+    if not pg then return false end
+
+    -- Priority A: named Reeling path
+    local reel = pg:FindFirstChild("Reeling")
+    if reel then
+        local mf = reel:FindFirstChild("MainFrame")
+        if mf then
+            local fr = mf:FindFirstChild("Frame")
+            if fr then
+                local wb = fr:FindFirstChild("WhiteBar")
+                local rb = fr:FindFirstChild("RedBar")
+                local pbBg = mf:FindFirstChild("ProgressBg")
+                local pb = pbBg and pbBg:FindFirstChild("ProgressBar")
+                if wb and rb then _wBar=wb; _rBar=rb; _pBar=pb; return true end
+            end
+        end
+    end
+
+    -- Priority B: structural ScreenGui search
+    for _, sg in ipairs(pg:GetChildren()) do
+        if sg:IsA("ScreenGui") then
+            local wb2, rb2, pb2 = nil, nil, nil
+            for _, desc in ipairs(sg:GetDescendants()) do
+                if desc:IsA("GuiObject") and trulyVis(desc) then
+                    local ln = desc.Name:lower()
+                    if ln == "whitebar" or ln == "playerbar" or (ln:find("white") and ln:find("bar")) then
+                        wb2 = desc
+                    elseif ln:find("red") and ln:find("bar") then rb2 = desc
+                    elseif ln:find("progress") and ln:find("bar") then pb2 = desc
+                    end
+                end
+            end
+            if wb2 and rb2 then _wBar=wb2; _rBar=rb2; _pBar=pb2; return true end
+        end
+    end
+
+    -- Priority C: color fallback
+    for _, v in ipairs(pg:GetDescendants()) do
+        if v:IsA("GuiObject") and trulyVis(v) and v.AbsoluteSize.X > 12 and v.AbsoluteSize.Y > 5 then
+            local c = v.BackgroundColor3; local par = v.Parent
+            if c.R > 0.78 and c.G > 0.78 and c.B > 0.78 and par and par:IsA("GuiObject") then
+                for _, sib in ipairs(par:GetChildren()) do
+                    if sib ~= v and sib:IsA("GuiObject") and trulyVis(sib) and sib.AbsoluteSize.X > 12 then
+                        local sc = sib.BackgroundColor3
+                        if sc.R > 0.46 and sc.G < 0.22 and sc.B < 0.22 then
+                            _wBar = v; _rBar = sib; return true
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    return false
+end
+
+-- ── Spots file ────────────────────────────────────────────────
 local SPOTS_FILE = "nzh_spots.json"
-local spots      = {}
-local MAX_SPOTS  = 10
+local spots = {}
+local MAX_SPOTS = 10
+
+local function validateSpot(sp)
+    if type(sp) ~= "table" then return false end
+    if type(sp.name) ~= "string" or sp.name == "" then return false end
+    if not (type(sp.x) == "number" and math.abs(sp.x) < 1e9 and sp.x == sp.x) then return false end
+    if not (type(sp.y) == "number" and math.abs(sp.y) < 1e9 and sp.y == sp.y) then return false end
+    if not (type(sp.z) == "number" and math.abs(sp.z) < 1e9 and sp.z == sp.z) then return false end
+    return true
+end
 
 local function saveSpots()
-	pcall(function()
-		if writefile then writefile(SPOTS_FILE, HTTP:JSONEncode(spots)) end
-	end)
+    if not Capabilities.fileIO then return end
+    pcall(function() writefile(SPOTS_FILE, HTTP:JSONEncode(spots)) end)
 end
 
 local function loadSpots()
-	pcall(function()
-		if isfile and readfile and isfile(SPOTS_FILE) then
-			local ok, data = pcall(HTTP.JSONDecode, HTTP, readfile(SPOTS_FILE))
-			if ok and type(data) == "table" then spots = data end
-		end
-	end)
+    if not Capabilities.fileIO then return end
+    pcall(function()
+        if isfile(SPOTS_FILE) then
+            local ok, data = pcall(HTTP.JSONDecode, HTTP, readfile(SPOTS_FILE))
+            if ok and type(data) == "table" then
+                local clean = {}
+                for _, sp in ipairs(data) do
+                    if validateSpot(sp) then
+                        clean[#clean+1] = sp
+                        if #clean >= MAX_SPOTS then break end
+                    end
+                end
+                spots = clean
+            end
+        end
+    end)
 end
 loadSpots()
 
--- ── Helpers ─────────────────────────────────────────
-local function safe(fn) xpcall(fn, function(e) warn("[NF] "..tostring(e)) end) end
-
-local function jt(base, p)
-	if not CFG.jitter then return base end
-	return base * (1 + (math.random() * 2 - 1) * (p or 0.09))
-end
-
-local function jv(v2)
-	if not CFG.coordJitter then return v2 end
-	return Vector2.new(v2.X + math.random(-12, 12), v2.Y + math.random(-8, 8))
-end
-
-local function setJumpSuppressed(suppressed)
-	pcall(function()
-		local ch = me.Character
-		local hum = ch and ch:FindFirstChildOfClass("Humanoid")
-		if hum then
-			hum:SetStateEnabled(
-				Enum.HumanoidStateType.Jumping,
-				not suppressed
-			)
-		end
-	end)
-end
-
-local function restoreCharacterState()
-	isSpace = false
-	isCasting = false
-
-	pcall(function()
-		VIM:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
-		VIM:SendKeyEvent(false, Enum.KeyCode.LeftShift, false, game)
-	end)
-
-	setJumpSuppressed(false)
-end
-
--- ── Forward Declarations ─────────────────────────────
-local doReset
-local addLog
-local updateRodUI
-local gui
-
--- ── Script Lifecycle Controller ──────────────────────
-local _S = { alive = true, c = {} }
-_S.stop = function()
-	_S.alive = false
-	active = false
-	castSess = castSess + 1
-	restoreCharacterState()
-
-	for _, v in ipairs(_S.c) do pcall(function() v:Disconnect() end) end
-	table.clear(_S.c)
-
-	pcall(function()
-		local pt = workspace:FindFirstChild("_nzh_p")
-		if pt then pt:Destroy() end
-		if gui and gui.Parent then gui:Destroy() end
-	end)
-end
-shared._nzh2 = _S
-
--- ── Webhook ─────────────────────────────────────────
+-- ── Webhook (off by default, never logs URL) ──────────────────
+local webhookURL = ""
+local webhookOn  = false
 local function sendWebhook(title, body, colorInt)
-	if not webhookOn or webhookURL == "" then return end
-	if not webhookURL:find("discord%.com/api/webhooks") then return end
-	task.spawn(function()
-		local el   = active and (os.clock() - sessStart) or 0
-		local h, m, s = math.floor(el/3600), math.floor(el%3600/60), math.floor(el%60)
-		local rod  = RODS[rodIdx]
-		local ok, payload = pcall(HTTP.JSONEncode, HTTP, {
-			embeds = {{
-				title       = title,
-				description = body,
-				color       = colorInt or 0xb49352,
-				fields      = {
-					{ name = "Tangkapan",  value = tostring(fishCount),
-					  inline = true },
-					{ name = "Durasi",
-					  value = string.format("%02d:%02d:%02d", h, m, s),
-					  inline = true },
-					{ name = "Rod",  value = rod and rod.n or "—", inline = true },
-				},
-				footer = { text = "NasiHub v2.0" },
-			}},
-		})
-		if not ok then return end
-		local req = (syn and syn.request) or (http and http.request) or http_request or request
-		if req then
-			pcall(req, {
-				Url     = webhookURL, Method = "POST",
-				Headers = { ["Content-Type"] = "application/json" },
-				Body    = payload,
-			})
-		end
-	end)
+    if not webhookOn or webhookURL == "" then return end
+    if not webhookURL:find("discord%.com/api/webhooks") then return end
+    task.spawn(function()
+        local el = os.clock() - sessStart
+        local h, m, s = math.floor(el/3600), math.floor(el%3600/60), math.floor(el%60)
+        local rod = _currentRod
+        local ok, payload = pcall(HTTP.JSONEncode, HTTP, {
+            embeds = {{
+                title       = title,
+                description = body,
+                color       = colorInt or 0xb49352,
+                fields = {
+                    { name="Confirmed", value=tostring(fishConfirmed), inline=true },
+                    { name="Duration",  value=string.format("%02d:%02d:%02d",h,m,s), inline=true },
+                    { name="Rod",       value=rod.name.." ("..rod.source..")", inline=true },
+                },
+                footer = { text = "NasiHub v3.0" },
+            }},
+        })
+        if not ok then return end
+        local req = (type(request)=="function" and request)
+                 or (type(syn)=="table" and type((syn or {}).request)=="function" and syn.request)
+                 or (type(http_request)=="function" and http_request)
+        if req then
+            pcall(req, {
+                Url = webhookURL, Method = "POST",
+                Headers = {["Content-Type"] = "application/json"},
+                Body = payload,
+            })
+        end
+    end)
 end
 
--- ── GUI Cleanup ──────────────────────────────────────
+-- ── GUI CLEANUP ───────────────────────────────────────────────
 pcall(function()
-	local cg = game:GetService("CoreGui")
-	for _, n in ipairs({ "_NZH2", "_NZH_UI", "NH_v9_GUI", "IH_v5", "NH_v6_GUI" }) do
-		local a = cg:FindFirstChild(n); if a then a:Destroy() end
-		if me.PlayerGui then
-			local b = me.PlayerGui:FindFirstChild(n); if b then b:Destroy() end
-		end
-	end
+    local cg = game:GetService("CoreGui")
+    for _, n in ipairs({"_NZH2","_NZH_UI","NH_v9_GUI","IH_v5","NH_v6_GUI","_nzh_fish3"}) do
+        local a = cg:FindFirstChild(n); if a then a:Destroy() end
+        if me.PlayerGui then
+            local b = me.PlayerGui:FindFirstChild(n); if b then b:Destroy() end
+        end
+    end
 end)
 
 task.wait(0.05)
 
--- ── ScreenGui ───────────────────────────────────────
-gui = Instance.new("ScreenGui")
-gui.Name           = "_NZH2"
-gui.ResetOnSpawn   = false
-gui.DisplayOrder   = 25
-gui.IgnoreGuiInset = false
-if not pcall(function() gui.Parent = game:GetService("CoreGui") end) then
-	gui.Parent = me:WaitForChild("PlayerGui")
-end
-
--- ── Palette: NasiHub Modern Dark + Crimson Coral Accent
+-- ── PALETTE ───────────────────────────────────────────────────
 local C = {
-	bg        = Color3.fromRGB(15,  15,  18),
-	card      = Color3.fromRGB(22,  22,  27),
-	cardHover = Color3.fromRGB(28,  28,  35),
-	border    = Color3.fromRGB(38,  38,  46),
-	borderHi  = Color3.fromRGB(55,  55,  68),
-	accent    = Color3.fromRGB(225,  48,  48),
-	gold      = Color3.fromRGB(225,  48,  48),
-	txt       = Color3.fromRGB(240, 240, 246),
-	subtxt    = Color3.fromRGB(170, 170, 185),
-	dim       = Color3.fromRGB(115, 115, 130),
-	muted     = Color3.fromRGB( 65,  65,  78),
-	navActive = Color3.fromRGB( 25,  25,  32),
-	swOn      = Color3.fromRGB(225,  48,  48),
-	swOff     = Color3.fromRGB( 40,  40,  48),
+    bg     = Color3.fromRGB(13,13,16),
+    card   = Color3.fromRGB(20,20,25),
+    border = Color3.fromRGB(36,36,44),
+    accent = Color3.fromRGB(220,45,45),
+    txt    = Color3.fromRGB(238,238,245),
+    subtxt = Color3.fromRGB(168,168,183),
+    dim    = Color3.fromRGB(112,112,128),
+    muted  = Color3.fromRGB(62,62,75),
+    swOn   = Color3.fromRGB(220,45,45),
+    swOff  = Color3.fromRGB(38,38,46),
 }
 
--- ── GUI Builder Helpers ──────────────────────────────
 local function rnd(obj, r)
-	Instance.new("UICorner", obj).CornerRadius = UDim.new(0, r or 6)
+    Instance.new("UICorner", obj).CornerRadius = UDim.new(0, r or 6)
 end
-
 local function mkStroke(obj, col, thick)
-	local s = Instance.new("UIStroke", obj)
-	s.Color = col or C.border; s.Thickness = thick or 1
-	return s
+    local s = Instance.new("UIStroke", obj)
+    s.Color = col or C.border; s.Thickness = thick or 1
+    return s
 end
-
 local function mkLbl(parent, text, size, font, color)
-	local l = Instance.new("TextLabel", parent)
-	l.BackgroundTransparency = 1
-	l.Text           = text or ""
-	l.TextSize       = size or 10.5
-	l.Font           = font or Enum.Font.GothamMedium
-	l.TextColor3     = color or C.txt
-	l.TextXAlignment = Enum.TextXAlignment.Left
-	l.TextTruncate   = Enum.TextTruncate.AtEnd
-	l.Size           = UDim2.new(1, 0, 0, size and size + 4 or 15)
-	return l
+    local l = Instance.new("TextLabel", parent)
+    l.BackgroundTransparency = 1; l.Text = text or ""; l.TextSize = size or 10
+    l.Font = font or Enum.Font.GothamMedium; l.TextColor3 = color or C.txt
+    l.TextXAlignment = Enum.TextXAlignment.Left; l.TextTruncate = Enum.TextTruncate.AtEnd
+    l.Size = UDim2.new(1,0,0,(size or 10)+4)
+    return l
+end
+local function mkBtn(parent, text, bg, tc, tsz)
+    local b = Instance.new("TextButton", parent)
+    b.BackgroundColor3 = bg or C.card; b.Text = text or ""; b.TextColor3 = tc or C.txt
+    b.Font = Enum.Font.GothamBold; b.TextSize = tsz or 9.5; b.BorderSizePixel = 0
+    b.AutoButtonColor = false; rnd(b,6); mkStroke(b,C.border,1)
+    local orig = b.BackgroundColor3; local hi = orig:Lerp(C.accent, 0.18)
+    b.MouseEnter:Connect(function() TS:Create(b,TweenInfo.new(0.12),{BackgroundColor3=hi}):Play() end)
+    b.MouseLeave:Connect(function() TS:Create(b,TweenInfo.new(0.12),{BackgroundColor3=orig}):Play() end)
+    return b
 end
 
-local function mkBtn(parent, text, bg, tc, textSize)
-	local b = Instance.new("TextButton", parent)
-	b.BackgroundColor3 = bg or C.card
-	b.Text             = text or ""
-	b.TextColor3       = tc or C.txt
-	b.Font             = Enum.Font.GothamBold
-	b.TextSize         = textSize or 10
-	b.BorderSizePixel  = 0
-	b.AutoButtonColor  = false
-	rnd(b, 6)
-	mkStroke(b, C.border, 1)
-
-	local orig = b.BackgroundColor3
-	local hi   = orig:Lerp(C.accent, 0.16)
-	b.MouseEnter:Connect(function()
-		TS:Create(b, TweenInfo.new(0.12), {BackgroundColor3 = hi}):Play()
-	end)
-	b.MouseLeave:Connect(function()
-		TS:Create(b, TweenInfo.new(0.12), {BackgroundColor3 = orig}):Play()
-	end)
-	return b
+-- ── GUI ───────────────────────────────────────────────────────
+local gui = Instance.new("ScreenGui")
+gui.Name = "_nzh_fish3"; gui.ResetOnSpawn = false; gui.DisplayOrder = 25
+if not pcall(function() gui.Parent = game:GetService("CoreGui") end) then
+    gui.Parent = me:WaitForChild("PlayerGui")
 end
 
-local function mkToggle(parent, y, labelText, subText, defVal, callback)
-	local row = Instance.new("Frame", parent)
-	row.Size              = UDim2.new(1, -16, 0, 36)
-	row.Position          = UDim2.new(0, 8, 0, y)
-	row.BackgroundColor3  = C.card
-	row.BorderSizePixel   = 0
-	rnd(row, 8)
-	mkStroke(row, C.border)
-
-	local lbl = mkLbl(row, labelText, 9.5, Enum.Font.GothamBold, C.txt)
-	lbl.Size     = UDim2.new(1, -54, 0, 14)
-	lbl.Position = UDim2.new(0, 10, 0, subText and 4 or 10)
-
-	if subText then
-		local sub = mkLbl(row, subText, 7.5, Enum.Font.Gotham, C.dim)
-		sub.Size     = UDim2.new(1, -54, 0, 12)
-		sub.Position = UDim2.new(0, 10, 0, 19)
-	end
-
-	local sw = Instance.new("TextButton", row)
-	sw.Size              = UDim2.new(0, 36, 0, 20)
-	sw.Position          = UDim2.new(1, -46, 0.5, -10)
-	sw.BackgroundColor3  = defVal and C.swOn or C.swOff
-	sw.Text              = ""
-	sw.BorderSizePixel   = 0
-	sw.AutoButtonColor   = false
-	rnd(sw, 10)
-
-	local knob = Instance.new("Frame", sw)
-	knob.Size              = UDim2.new(0, 16, 0, 16)
-	knob.Position          = defVal and UDim2.new(1,-18,0.5,-8) or UDim2.new(0,2,0.5,-8)
-	knob.BackgroundColor3  = C.txt
-	knob.BorderSizePixel   = 0
-	rnd(knob, 8)
-
-	local val = defVal
-	sw.MouseButton1Click:Connect(function()
-		if not _S.alive then return end
-		val = not val
-		TS:Create(sw,   TweenInfo.new(0.12), {BackgroundColor3 = val and C.swOn or C.swOff}):Play()
-		TS:Create(knob, TweenInfo.new(0.12), {
-			Position = val and UDim2.new(1,-18,0.5,-8) or UDim2.new(0,2,0.5,-8)
-		}):Play()
-		callback(val)
-	end)
-	return sw
-end
-
--- ══════════════════════════════════════════════════
--- LAYOUT: NasiHub Modern Floating Hub
--- Window 440x310 | Sidebar 125px | Content 315px
--- ══════════════════════════════════════════════════
 local main = Instance.new("Frame", gui)
-main.Size             = UDim2.new(0, 440, 0, 310)
-main.Position         = UDim2.new(1, -455, 0.5, -155)
-main.BackgroundColor3 = C.bg
-main.BackgroundTransparency = 0
-main.BorderSizePixel  = 0
-main.Active           = true
-main.Draggable        = true
-rnd(main, 12)
-mkStroke(main, C.border, 1)
+main.Size = UDim2.new(0,350,0,260); main.Position = UDim2.new(1,-365,0.5,-130)
+main.BackgroundColor3 = C.bg; main.BorderSizePixel = 0; main.Active = true; main.Draggable = true
+rnd(main,12); mkStroke(main,C.border,1)
 
 local floatBtn = Instance.new("TextButton", gui)
-floatBtn.Size             = UDim2.new(0, 38, 0, 38)
-floatBtn.Position         = UDim2.new(1, -48, 0.5, -19)
-floatBtn.BackgroundColor3 = C.card
-floatBtn.Text             = "NH"
-floatBtn.TextColor3       = C.accent
-floatBtn.Font             = Enum.Font.GothamBold
-floatBtn.TextSize         = 11
-floatBtn.BorderSizePixel  = 0
-floatBtn.Active           = true
-floatBtn.Draggable        = true
-floatBtn.Visible          = false
-rnd(floatBtn, 19)
-mkStroke(floatBtn, C.border, 1)
+floatBtn.Size = UDim2.new(0,36,0,36); floatBtn.Position = UDim2.new(1,-44,0.5,-18)
+floatBtn.BackgroundColor3 = C.card; floatBtn.Text = "NF"; floatBtn.TextColor3 = C.accent
+floatBtn.Font = Enum.Font.GothamBold; floatBtn.TextSize = 11; floatBtn.BorderSizePixel = 0
+floatBtn.Visible = false; floatBtn.Active = true; floatBtn.Draggable = true
+rnd(floatBtn,18); mkStroke(floatBtn,C.border,1)
 
--- ─ TOP BAR ──────────────────────────────────────────────────
+-- Top bar
 local topBar = Instance.new("Frame", main)
-topBar.Size             = UDim2.new(1, 0, 0, 38)
-topBar.BackgroundColor3 = C.bg
-topBar.BorderSizePixel  = 0
-
+topBar.Size = UDim2.new(1,0,0,36); topBar.BackgroundColor3 = C.bg; topBar.BorderSizePixel = 0
 do
-	local td = Instance.new("Frame", topBar)
-	td.Size=UDim2.new(1,0,0,1); td.Position=UDim2.new(0,0,1,-1)
-	td.BackgroundColor3=C.border; td.BorderSizePixel=0
+    local div = Instance.new("Frame",topBar)
+    div.Size=UDim2.new(1,0,0,1); div.Position=UDim2.new(0,0,1,-1)
+    div.BackgroundColor3=C.border; div.BorderSizePixel=0
 end
-
 local function mkDot(x,col)
-	local d=Instance.new("Frame",topBar)
-	d.Size=UDim2.new(0,9,0,9); d.Position=UDim2.new(0,x,0.5,-4.5)
-	d.BackgroundColor3=col; d.BorderSizePixel=0; rnd(d,5)
+    local d=Instance.new("Frame",topBar)
+    d.Size=UDim2.new(0,8,0,8); d.Position=UDim2.new(0,x,0.5,-4)
+    d.BackgroundColor3=col; d.BorderSizePixel=0; rnd(d,4)
 end
-mkDot(12, Color3.fromRGB(255, 95, 87))
-mkDot(26, Color3.fromRGB(254,188, 47))
-mkDot(40, Color3.fromRGB( 40,200, 64))
+mkDot(12, Color3.fromRGB(255,95,87)); mkDot(24, Color3.fromRGB(254,188,47)); mkDot(36, Color3.fromRGB(40,200,64))
+local titleL = mkLbl(topBar,"Nazhan Fish",11,Enum.Font.GothamBold,C.txt)
+titleL.Size=UDim2.new(0,90,0,14); titleL.Position=UDim2.new(0,52,0,3)
+local verL = mkLbl(topBar,"v3.0",7.5,Enum.Font.Gotham,C.dim)
+verL.Size=UDim2.new(0,30,0,11); verL.Position=UDim2.new(0,52,0,19)
+local hideBtn = mkBtn(topBar,"×",C.bg,C.dim,16)
+hideBtn.Size=UDim2.new(0,20,0,20); hideBtn.Position=UDim2.new(1,-28,0.5,-10)
 
-local hubN=mkLbl(topBar,"NasiHub",11.5,Enum.Font.GothamBold,C.txt)
-hubN.Size=UDim2.new(0,80,0,16); hubN.Position=UDim2.new(0,58,0,5)
+-- Content frame
+local cont = Instance.new("Frame", main)
+cont.Size = UDim2.new(1,-16,1,-46); cont.Position = UDim2.new(0,8,0,38)
+cont.BackgroundTransparency = 1; cont.BorderSizePixel = 0
 
-local hubS=mkLbl(topBar,"Auto Fishing",8,Enum.Font.GothamMedium,C.dim)
-hubS.Size=UDim2.new(0,80,0,12); hubS.Position=UDim2.new(0,58,0,21)
-
-local verBadge=mkBtn(topBar,"v2.0",C.card,C.dim,8)
-verBadge.Size=UDim2.new(0,42,0,18); verBadge.Position=UDim2.new(0,146,0.5,-9)
-rnd(verBadge,9); mkStroke(verBadge,C.border)
-
-local hideBtn=mkBtn(topBar,"×",C.bg,C.dim,15)
-hideBtn.Size=UDim2.new(0,22,0,22); hideBtn.Position=UDim2.new(1,-30,0.5,-11)
-
--- ─ SIDEBAR ─────────────────────────────────────────────────
-local sidebar=Instance.new("Frame",main)
-sidebar.Size=UDim2.new(0,125,1,-38); sidebar.Position=UDim2.new(0,0,0,38)
-sidebar.BackgroundColor3=C.bg; sidebar.BorderSizePixel=0
-
-do
-	local sd=Instance.new("Frame",sidebar)
-	sd.Size=UDim2.new(0,1,1,0); sd.Position=UDim2.new(1,-1,0,0)
-	sd.BackgroundColor3=C.border; sd.BorderSizePixel=0
-end
-
--- ─ CONTENT AREA ───────────────────────────────────────────
-local contentBg=Instance.new("Frame",main)
-contentBg.Size=UDim2.new(1,-125,1,-38); contentBg.Position=UDim2.new(0,125,0,38)
-contentBg.BackgroundColor3=C.card; contentBg.BorderSizePixel=0
-contentBg.ClipsDescendants=true
-
--- ─ NAV ITEMS ───────────────────────────────────────────────
-local NAV={
-	{key="Mancing",label="Mancing",  icon="🎣"},
-	{key="Spot",   label="Spot",     icon="📍"},
-	{key="Seting", label="Seting",   icon="⚙️"},
-	{key="Notif",  label="Notif",    icon="🔔"},
-	{key="Log",    label="Console",  icon="📜"},
-}
-local navBtns={}; local panels={}
-
-for i,item in ipairs(NAV) do
-	local ny=8+(i-1)*40
-	local btn=Instance.new("TextButton",sidebar)
-	btn.Size=UDim2.new(1,-12,0,34); btn.Position=UDim2.new(0,6,0,ny)
-	btn.BackgroundColor3=C.bg; btn.BorderSizePixel=0
-	btn.Text=""; btn.AutoButtonColor=false; rnd(btn,7)
-
-	local ico=Instance.new("TextLabel",btn)
-	ico.BackgroundTransparency=1
-	ico.Size=UDim2.new(0,20,1,0); ico.Position=UDim2.new(0,8,0,0)
-	ico.Text=item.icon; ico.Font=Enum.Font.Gotham
-	ico.TextSize=10; ico.TextColor3=C.dim
-	ico.TextXAlignment=Enum.TextXAlignment.Center
-
-	local lbl=mkLbl(btn,item.label,9.5,Enum.Font.GothamMedium,C.dim)
-	lbl.Size=UDim2.new(1,-34,1,0); lbl.Position=UDim2.new(0,32,0,0)
-
-	navBtns[item.key]={btn=btn,ico=ico,lbl=lbl}
-
-	local p=Instance.new("ScrollingFrame",contentBg)
-	p.Size=UDim2.new(1,0,1,0)
-	p.BackgroundTransparency=1; p.BorderSizePixel=0
-	p.ScrollBarThickness=2; p.ScrollBarImageColor3=C.border
-	p.CanvasSize=UDim2.new(0,0,0,0); p.Visible=(i==1)
-	panels[item.key]=p
-end
-
-local activeNav="Mancing"
-local function switchNav(name)
-	if activeNav==name then return end
-	local old=navBtns[activeNav]
-	if old then
-		TS:Create(old.btn,TweenInfo.new(0.12),{BackgroundColor3=C.bg}):Play()
-		old.lbl.TextColor3=C.dim; old.lbl.Font=Enum.Font.GothamMedium
-	end
-	activeNav=name
-	local nb=navBtns[name]
-	if nb then
-		TS:Create(nb.btn,TweenInfo.new(0.12),{BackgroundColor3=C.navActive}):Play()
-		nb.lbl.TextColor3=C.txt; nb.lbl.Font=Enum.Font.GothamBold
-	end
-	for n,p in pairs(panels) do p.Visible=(n==name) end
-end
-for name,nb in pairs(navBtns) do
-	nb.btn.MouseButton1Click:Connect(function() switchNav(name) end)
-end
-do
-	local nb=navBtns["Mancing"]
-	nb.btn.BackgroundColor3=C.navActive
-	nb.lbl.TextColor3=C.txt; nb.lbl.Font=Enum.Font.GothamBold
-end
-
--- ─ HIDE/SHOW ────────────────────────────────────────────────
-local savedPos=main.Position; local isHid=false
-local function doHide(h)
-	isHid=h
-	if h then
-		savedPos=main.Position
-		TS:Create(main,TweenInfo.new(0.18,Enum.EasingStyle.Quart,Enum.EasingDirection.In),
-			{Position=UDim2.new(1,10,0.5,-155)}):Play()
-		task.delay(0.19,function()
-			if isHid then main.Visible=false; floatBtn.Visible=true end
-		end)
-	else
-		main.Visible=true; floatBtn.Visible=false
-		main.Position=UDim2.new(1,10,0.5,-155)
-		TS:Create(main,TweenInfo.new(0.18,Enum.EasingStyle.Quart,Enum.EasingDirection.Out),
-			{Position=savedPos}):Play()
-	end
-end
-hideBtn.MouseButton1Click:Connect(function() doHide(true) end)
-floatBtn.MouseButton1Click:Connect(function() doHide(false) end)
-
--- ══ TAB 1: MANCING (AESTHETIC & PERFECT FIT) ═════════
-local pM=panels["Mancing"]
-pM.CanvasSize = UDim2.new(0,0,0,0) -- Fits seamlessly without scrollbar
-
--- 1. Status Hero Card (y=8, height=64)
-local stCard=Instance.new("Frame",pM)
-stCard.Size=UDim2.new(1,-16,0,64); stCard.Position=UDim2.new(0,8,0,8)
-stCard.BackgroundColor3=C.bg; stCard.BorderSizePixel=0
+-- Status hero card
+local stCard = Instance.new("Frame", cont)
+stCard.Size = UDim2.new(1,0,0,62); stCard.Position = UDim2.new(0,0,0,0)
+stCard.BackgroundColor3 = C.card; stCard.BorderSizePixel = 0
 rnd(stCard,8); mkStroke(stCard,C.border)
 
-local stateDot=Instance.new("Frame",stCard)
-stateDot.Size=UDim2.new(0,7,0,7); stateDot.Position=UDim2.new(0,10,0,12)
-stateDot.BackgroundColor3=C.muted; stateDot.BorderSizePixel=0; rnd(stateDot,4)
+local stDot = Instance.new("Frame", stCard)
+stDot.Size=UDim2.new(0,7,0,7); stDot.Position=UDim2.new(0,10,0,12)
+stDot.BackgroundColor3=C.muted; stDot.BorderSizePixel=0; rnd(stDot,4)
 
-local stateL=mkLbl(stCard,"Idle",10,Enum.Font.GothamBold,C.txt)
-stateL.Size=UDim2.new(1,-24,0,14); stateL.Position=UDim2.new(0,22,0,8)
+local stateL = mkLbl(stCard,"Idle",10,Enum.Font.GothamBold,C.txt)
+stateL.Size=UDim2.new(1,-30,0,14); stateL.Position=UDim2.new(0,22,0,8)
 
-local fishCountL=mkLbl(stCard,"Tangkapan: 0 ikan",9,Enum.Font.GothamMedium,C.subtxt)
-fishCountL.Size=UDim2.new(0.55,0,0,13); fishCountL.Position=UDim2.new(0,10,0,26)
+local cntL = mkLbl(stCard,"Confirmed: 0 | Attempts: 0 | Unknown: 0",8,Enum.Font.Gotham,C.subtxt)
+cntL.Size=UDim2.new(1,-16,0,12); cntL.Position=UDim2.new(0,10,0,27)
 
-local rateL=mkLbl(stCard,"Rate 0/jam",8.5,Enum.Font.Gotham,C.dim)
-rateL.Size=UDim2.new(0.45,-10,0,13); rateL.Position=UDim2.new(0.55,0,0,26)
-rateL.TextXAlignment=Enum.TextXAlignment.Right
-
-local sessTimeL=mkLbl(stCard,"Sesi 00:00:00",8,Enum.Font.Gotham,C.muted)
-sessTimeL.Size=UDim2.new(0.5,0,0,12); sessTimeL.Position=UDim2.new(0,10,0,44)
-
-local perfL=mkLbl(stCard,"Performa: normal",8,Enum.Font.Gotham,C.muted)
-perfL.Size=UDim2.new(0.5,-10,0,12); perfL.Position=UDim2.new(0.5,0,0,44)
-perfL.TextXAlignment=Enum.TextXAlignment.Right
+local rodL = mkLbl(stCard,"Rod: — (NONE)",7.5,Enum.Font.Gotham,C.dim)
+rodL.Size=UDim2.new(1,-16,0,12); rodL.Position=UDim2.new(0,10,0,42)
 
 local dotPulse
 local function setDot(col)
-	if dotPulse then dotPulse:Cancel() end
-	stateDot.BackgroundColor3=col
-	dotPulse=TS:Create(stateDot,
-		TweenInfo.new(0.65,Enum.EasingStyle.Sine,Enum.EasingDirection.InOut,-1,true),
-		{BackgroundColor3=col:Lerp(C.txt,0.42)})
-	dotPulse:Play()
+    if dotPulse then dotPulse:Cancel() end
+    stDot.BackgroundColor3 = col
+    dotPulse = TS:Create(stDot,
+        TweenInfo.new(0.65,Enum.EasingStyle.Sine,Enum.EasingDirection.InOut,-1,true),
+        {BackgroundColor3=col:Lerp(C.txt,0.42)})
+    dotPulse:Play()
 end
 setDot(C.muted)
 
--- 2. Phase Progress Tracker (y=78, height=22)
-local phCont=Instance.new("Frame",pM)
-phCont.Size=UDim2.new(1,-16,0,22); phCont.Position=UDim2.new(0,8,0,78)
-phCont.BackgroundTransparency=1; phCont.BorderSizePixel=0
-
-local barBg=Instance.new("Frame",phCont)
+-- Phase bar
+local phaseCont = Instance.new("Frame",cont)
+phaseCont.Size=UDim2.new(1,0,0,20); phaseCont.Position=UDim2.new(0,0,0,68)
+phaseCont.BackgroundTransparency=1
+local barBg = Instance.new("Frame",phaseCont)
 barBg.Size=UDim2.new(1,0,0,3); barBg.Position=UDim2.new(0,0,1,-3)
 barBg.BackgroundColor3=C.border; barBg.BorderSizePixel=0; rnd(barBg,2)
-
-local barFill=Instance.new("Frame",barBg)
+local barFill = Instance.new("Frame",barBg)
 barFill.Size=UDim2.new(0,0,1,0); barFill.BackgroundColor3=C.accent
 barFill.BorderSizePixel=0; rnd(barFill,2)
 
-local phNames={"Lempar","Tunggu","Minigame","Selesai"}; local phLbls={}
-for i,pn in ipairs(phNames) do
-	local pl=Instance.new("TextLabel",phCont)
-	pl.BackgroundTransparency=1
-	pl.Size=UDim2.new(1/#phNames,0,0,14)
-	pl.Position=UDim2.new((i-1)/#phNames,0,0,0)
-	pl.Text=pn; pl.Font=Enum.Font.GothamMedium; pl.TextSize=7.5
-	pl.TextColor3=C.muted; pl.TextXAlignment=Enum.TextXAlignment.Center; phLbls[i]=pl
+local function setPhaseBar(pct)
+    TS:Create(barFill,TweenInfo.new(0.15,Enum.EasingStyle.Quart),
+        {Size=UDim2.new(math.clamp(pct,0,1),0,1,0)}):Play()
 end
 
-local curPhase=0
-local function setPhase(n)
-	curPhase=n
-	for i,pl in ipairs(phLbls) do
-		pl.TextColor3=(i<=n) and C.accent or C.muted
-		pl.Font=(i==n) and Enum.Font.GothamBold or Enum.Font.GothamMedium
-	end
-	TS:Create(barFill,TweenInfo.new(0.2,Enum.EasingStyle.Quart),
-		{Size=UDim2.new(n/#phNames,0,1,0)}):Play()
-end
-
-local function setPct(pct)
-	pct = math.clamp(tonumber(pct) or 0, 0, 1)
-	local value = curPhase / #phNames + pct * (1 / #phNames)
-	value = math.clamp(value, 0, 1)
-	TS:Create(
-		barFill,
-		TweenInfo.new(0.1, Enum.EasingStyle.Linear),
-		{Size = UDim2.new(value, 0, 1, 0)}
-	):Play()
-end
-
--- 3. Auto Fishing Row Card (y=106, height=38)
-local fishRow=Instance.new("Frame",pM)
-fishRow.Size=UDim2.new(1,-16,0,38); fishRow.Position=UDim2.new(0,8,0,106)
+-- Toggle ON/OFF row
+local fishRow = Instance.new("Frame",cont)
+fishRow.Size=UDim2.new(1,0,0,36); fishRow.Position=UDim2.new(0,0,0,94)
 fishRow.BackgroundColor3=C.bg; fishRow.BorderSizePixel=0
 rnd(fishRow,8); mkStroke(fishRow,C.border)
 
-local fishLbl=mkLbl(fishRow,"Auto Fishing Engine",9.5,Enum.Font.GothamBold,C.txt)
-fishLbl.Size=UDim2.new(1,-54,0,14); fishLbl.Position=UDim2.new(0,10,0,5)
+local fLbl = mkLbl(fishRow,"Auto Fishing Engine",9.5,Enum.Font.GothamBold,C.txt)
+fLbl.Size=UDim2.new(1,-54,0,14); fLbl.Position=UDim2.new(0,10,0,5)
+local fSub = mkLbl(fishRow,"SUCCESS_CONFIRMED only (bar-gone = UNKNOWN)",7.5,Enum.Font.Gotham,C.dim)
+fSub.Size=UDim2.new(1,-54,0,12); fSub.Position=UDim2.new(0,10,0,20)
 
-local fishSub=mkLbl(fishRow,"Otomatis lempar & tangkap ikan",7.5,Enum.Font.Gotham,C.dim)
-fishSub.Size=UDim2.new(1,-54,0,12); fishSub.Position=UDim2.new(0,10,0,20)
-
-local fishSw=Instance.new("TextButton",fishRow)
+local fishSw = Instance.new("TextButton",fishRow)
 fishSw.Size=UDim2.new(0,36,0,20); fishSw.Position=UDim2.new(1,-46,0.5,-10)
 fishSw.BackgroundColor3=C.swOff; fishSw.Text=""; fishSw.BorderSizePixel=0
 fishSw.AutoButtonColor=false; rnd(fishSw,10)
-
 local fishKnob=Instance.new("Frame",fishSw)
 fishKnob.Size=UDim2.new(0,16,0,16); fishKnob.Position=UDim2.new(0,2,0.5,-8)
 fishKnob.BackgroundColor3=C.txt; fishKnob.BorderSizePixel=0; rnd(fishKnob,8)
 
-local fishOn=false
-fishSw.MouseButton1Click:Connect(function()
-	if not _S.alive then return end
-	fishOn=not fishOn
-	TS:Create(fishSw,TweenInfo.new(0.12),{BackgroundColor3=fishOn and C.swOn or C.swOff}):Play()
-	TS:Create(fishKnob,TweenInfo.new(0.12),
-		{Position=fishOn and UDim2.new(1,-18,0.5,-8) or UDim2.new(0,2,0.5,-8)}):Play()
-	active=fishOn
-	if fishOn then
-		sessStart=os.clock()
-		fishCount=0
-		fishCountL.Text="Tangkapan: 0 ikan"
-		fishState="IDLE"; idleAt=os.clock()
-		setDot(C.accent); setPhase(0); stateL.Text="Memulai..."
-		pcall(function()
-			local root=me.Character and me.Character:FindFirstChild("HumanoidRootPart")
-			if root then lastAFKPos=root.Position end
-		end)
-	else
-		active=false
-		castSess=castSess+1
-		isCasting=false
-		isSpace=false
-		pcall(function() VIM:SendKeyEvent(false,Enum.KeyCode.Space,false,game) end)
-		setJumpSuppressed(false)
-		setDot(C.muted); setPhase(0); stateL.Text="Idle"
-		sendWebhook("Fishing Dihentikan","Sistem dimatikan.",0x888888)
-	end
+-- Reset / Diagnostics row
+local actRow = Instance.new("Frame",cont)
+actRow.Size=UDim2.new(1,0,0,28); actRow.Position=UDim2.new(0,0,0,136)
+actRow.BackgroundTransparency=1
+local rstBtn = mkBtn(actRow,"Reset",C.bg,C.dim,8.5)
+rstBtn.Size=UDim2.new(0.48,0,1,0)
+
+-- Confidence note
+local confL = mkLbl(cont,"Fishing result: NOT RUNTIME VERIFIED",7.5,Enum.Font.Gotham,C.dim)
+confL.Size=UDim2.new(1,0,0,13); confL.Position=UDim2.new(0,0,0,170)
+confL.TextColor3 = C.dim
+
+-- Hide/show
+local savedPos = main.Position; local isHid = false
+local function doHide(h)
+    isHid = h
+    if h then
+        savedPos = main.Position
+        TS:Create(main,TweenInfo.new(0.18,Enum.EasingStyle.Quart,Enum.EasingDirection.In),
+            {Position=UDim2.new(1,10,0.5,-130)}):Play()
+        task.delay(0.19,function()
+            if isHid then main.Visible=false; floatBtn.Visible=true end
+        end)
+    else
+        main.Visible=true; floatBtn.Visible=false
+        main.Position=UDim2.new(1,10,0.5,-130)
+        TS:Create(main,TweenInfo.new(0.18,Enum.EasingStyle.Quart,Enum.EasingDirection.Out),
+            {Position=savedPos}):Play()
+    end
+end
+hideBtn.MouseButton1Click:Connect(function() doHide(true) end)
+floatBtn.MouseButton1Click:Connect(function() doHide(false) end)
+
+-- ── FISHING RESET ─────────────────────────────────────────────
+local function doReset(reason)
+    generation = generation + 1
+    fishState   = STATES.IDLE
+    _casting    = false
+    _mgEverSeen = false
+    _mgStarted  = false
+    _mgLastSeen = 0
+    _idleAt     = os.clock()
+    resultState = "UNKNOWN"
+    _wBar = nil; _rBar = nil; _pBar = nil; _lastScan = 0
+    releaseAllInput()
+    setPhaseBar(0)
+    if _S.active then
+        stateL.Text = "Idle"; setDot(C.accent)
+    end
+    if reason then print("[NF] Reset: " .. tostring(reason)) end
+end
+
+rstBtn.MouseButton1Click:Connect(function()
+    if _S.active then doReset("manual") end
 end)
 
--- 4. Rod Status Card (y=150, height=32)
-local rodRow=Instance.new("Frame",pM)
-rodRow.Size=UDim2.new(1,-16,0,32); rodRow.Position=UDim2.new(0,8,0,150)
-rodRow.BackgroundColor3=C.bg; rodRow.BorderSizePixel=0
-rnd(rodRow,8); mkStroke(rodRow,C.border)
+-- ── MINIGAME TICKER (called from Heartbeat) ───────────────────
+local function tickMinigame(now)
+    if not _S.active or fishState ~= STATES.REELING then return end
+    local gen  = generation
+    local rod  = _currentRod
+    local slow = frameSlow
+    local el   = now - _mgAt
+    local timeout = (11 + rod.prog * 3.2) * (slow and 1.4 or 1.0)
 
-local rodIco=mkLbl(rodRow,"🎣",9,Enum.Font.Gotham,C.dim)
-rodIco.Size=UDim2.new(0,16,1,0); rodIco.Position=UDim2.new(0,8,0,0)
+    setPhaseBar(0.5 + math.clamp(el/timeout,0,1)*0.5)
 
-local rodName=mkLbl(rodRow,"—",9.5,Enum.Font.GothamBold,C.txt)
-rodName.Size=UDim2.new(0.5,-26,1,0); rodName.Position=UDim2.new(0,26,0,0)
+    if el >= timeout then
+        releaseAllInput()
+        resultState = "TIMEOUT"
+        fishFailed  = fishFailed + 1
+        fishAttempts = fishAttempts + 1
+        doReset("minigame-timeout")
+        return
+    end
 
-local rodStat=mkLbl(rodRow,"—",8,Enum.Font.GothamMedium,C.subtxt)
-rodStat.Size=UDim2.new(0.5,-8,1,0); rodStat.Position=UDim2.new(0.5,0,0,0)
-rodStat.TextXAlignment=Enum.TextXAlignment.Right
+    -- Try to resolve bars
+    local hasBars = resolveBars()
+    if hasBars and _wBar and _rBar and trulyVis(_wBar) and trulyVis(_rBar) then
+        resultState = "ACTIVE"
+        _mgEverSeen = true; _mgLastSeen = now
 
-updateRodUI = function()
-	local rod = RODS[rodIdx]
-	if not rod then
-		rodName.Text = "—"
-		rodStat.Text = "—"
-		return
-	end
-	rodName.Text = rod.n
-	rodStat.Text = string.format("Lure %.0f%% | Progress %.0f%%", rod.lure * 100, rod.prog * 100)
-end
-updateRodUI()
+        if not _mgStarted then
+            _mgStarted = true; setSpace(false, true)
+        end
 
--- 5. Action Row: Reset & Spot Teleport (y=188, height=30)
-local actRow=Instance.new("Frame",pM)
-actRow.Size=UDim2.new(1,-16,0,30); actRow.Position=UDim2.new(0,8,0,188)
-actRow.BackgroundTransparency=1; actRow.BorderSizePixel=0
+        local wC = _wBar.AbsolutePosition.X + _wBar.AbsoluteSize.X * 0.5
+        local rL = _rBar.AbsolutePosition.X
+        local rR = rL + _rBar.AbsoluteSize.X
+        local rC = (rL + rR) * 0.5
+        local rw = math.max(_rBar.AbsoluteSize.X, 1)
+        local tol = math.clamp(rw * (0.18 + rod.lure * 0.025), 4, 28)
+        local inside = wC >= (rL - tol) and wC <= (rR + tol)
 
-local rstBtn=mkBtn(actRow,"Reset Sesi",C.bg,C.dim,9)
-rstBtn.Size=UDim2.new(0.48,0,1,0); rstBtn.Position=UDim2.new(0,0,0,0)
-rstBtn.MouseButton1Click:Connect(function() if doReset then doReset("manual") end end)
+        if inside then
+            if     wC < rL then setSpace(true)
+            elseif wC > rR then setSpace(false)
+            else
+                local e = wC - rC
+                if math.abs(e) > tol * 0.4 then setSpace(e < 0) end
+            end
+        else
+            local e = rC - wC
+            if     e >  tol then setSpace(true)
+            elseif e < -tol then setSpace(false)
+            end
+        end
 
-local spotNavBtn=mkBtn(actRow,"Kelola Spot 📍",C.bg,C.dim,9)
-spotNavBtn.Size=UDim2.new(0.48,0,1,0); spotNavBtn.Position=UDim2.new(0.52,0,0,0)
-spotNavBtn.MouseButton1Click:Connect(function() switchNav("Spot") end)
+        stateL.Text = string.format("Reeling... %.0fs", el)
 
--- Live Stat Updater Loop
-task.spawn(function()
-	while _S.alive do
-		task.wait(1)
-		local el=active and (os.clock()-sessStart) or 0
-		local h,m,s=math.floor(el/3600),math.floor(el%3600/60),math.floor(el%60)
-		local rate=(active and fishCount>0) and (fishCount/math.max(el/3600,0.01)) or 0
-		rateL.Text=string.format("Rate %.0f/jam",rate)
-		sessTimeL.Text=string.format("Sesi %02d:%02d:%02d",h,m,s)
-		if frameAvg>0.10 then
-			perfL.Text="Performa: rendah"
-			perfL.TextColor3=C.dim
-		elseif frameAvg>0.05 then
-			perfL.Text="Performa: lag"
-			perfL.TextColor3=C.dim
-		else
-			perfL.Text="Performa: normal"
-			perfL.TextColor3=C.muted
-		end
-	end
-end)
+    else
+        -- Bars not visible
+        if _mgStarted and _mgEverSeen and _mgLastSeen > 0 then
+            local gone = now - _mgLastSeen
+            if gone >= CFG.fishing.minigameGuard then
+                releaseAllInput()
+                -- bar-gone → UNKNOWN (NOT counted as success)
+                resultState  = "UNKNOWN"
+                fishUnknown  = fishUnknown + 1
+                fishAttempts = fishAttempts + 1
 
--- ══ TAB 2: SPOT ══════════════════════════════════════
-local pT=panels["Spot"]
-local spCountL=mkLbl(pT,"0 / 10 spot tersimpan",8.5,Enum.Font.GothamMedium,C.dim)
-spCountL.Size=UDim2.new(1,-16,0,14); spCountL.Position=UDim2.new(0,8,0,8)
-spCountL.TextXAlignment=Enum.TextXAlignment.Center
+                local gen2 = generation
+                task.delay(CFG.fishing.recastDelay, function()
+                    if gen2 ~= generation then return end
+                    doReset(nil)
+                    task.wait(0.06)
+                    if _S.active and gen2 == generation then
+                        fishState = STATES.IDLE; _idleAt = os.clock()
+                    end
+                end)
 
-local nameBox=Instance.new("TextBox",pT)
-nameBox.Size=UDim2.new(1,-84,0,28); nameBox.Position=UDim2.new(0,8,0,26)
-nameBox.BackgroundColor3=C.bg; nameBox.TextColor3=C.txt
-nameBox.PlaceholderText="Nama spot baru..."; nameBox.PlaceholderColor3=C.muted
-nameBox.Text=""; nameBox.ClearTextOnFocus=false
-nameBox.Font=Enum.Font.Gotham; nameBox.TextSize=9
-nameBox.TextXAlignment=Enum.TextXAlignment.Left; nameBox.BorderSizePixel=0
-rnd(nameBox,7); mkStroke(nameBox,C.border)
-Instance.new("UIPadding",nameBox).PaddingLeft=UDim.new(0,8)
-
-local saveSpotBtn=mkBtn(pT,"Simpan",C.accent,C.bg,9)
-saveSpotBtn.Size=UDim2.new(0,64,0,28); saveSpotBtn.Position=UDim2.new(1,-72,0,26)
-rnd(saveSpotBtn,7)
-
-local spSF=Instance.new("ScrollingFrame",pT)
-spSF.Size=UDim2.new(1,-16,1,-64); spSF.Position=UDim2.new(0,8,0,60)
-spSF.BackgroundTransparency=1; spSF.BorderSizePixel=0
-spSF.CanvasSize=UDim2.new(0,0,0,0); spSF.ScrollBarThickness=2
-spSF.ScrollBarImageColor3=C.border
-
-local spLL=Instance.new("UIListLayout",spSF)
-spLL.SortOrder=Enum.SortOrder.LayoutOrder; spLL.Padding=UDim.new(0,4)
-
-local function spawnPlat(pos)
-	pcall(function()
-		local old=workspace:FindFirstChild("_nzh_p"); if old then old:Destroy() end
-		local p=Instance.new("Part")
-		p.Name="_nzh_p"; p.Anchored=true; p.CanCollide=true
-		p.Size=Vector3.new(14,1,14); p.Position=pos-Vector3.new(0,3.2,0)
-		p.Material=Enum.Material.SmoothPlastic; p.Transparency=0.7
-		p.Color=Color3.fromRGB(100,80,40); p.Parent=workspace
-	end)
+                cntL.Text = string.format("Confirmed: %d | Attempts: %d | Unknown: %d",
+                    fishConfirmed, fishAttempts, fishUnknown)
+                stateL.Text = "RESULT_UNCONFIRMED"
+                fishState = STATES.RESULT_PENDING
+            end
+        elseif not _mgEverSeen then
+            local beat = math.floor((now - _mgAt) * 3.0) % 2 == 0
+            setSpace(beat)
+            stateL.Text = string.format("Sync... %.0fs", el)
+        end
+    end
 end
 
-local function doTeleport(pos)
-	local ch=me.Character; local root=ch and ch:FindFirstChild("HumanoidRootPart")
-	if not root then return end
-	lastAFKPos=pos; spawnPlat(pos); task.wait(0.08); root.CFrame=CFrame.new(pos)
-end
-
-local renderSpots
-renderSpots=function()
-	for _,ch in ipairs(spSF:GetChildren()) do
-		if ch:IsA("Frame") or ch:IsA("TextLabel") then ch:Destroy() end
-	end
-	spCountL.Text=string.format("%d / %d spot tersimpan",#spots,MAX_SPOTS)
-	if #spots==0 then
-		local none=Instance.new("TextLabel",spSF)
-		none.LayoutOrder=0; none.BackgroundTransparency=1; none.Size=UDim2.new(1,0,0,40)
-		none.Text="Belum ada spot tersimpan"; none.TextColor3=C.muted
-		none.Font=Enum.Font.Gotham; none.TextSize=8.5
-		none.TextXAlignment=Enum.TextXAlignment.Center; return
-	end
-	for i,sp in ipairs(spots) do
-		local row=Instance.new("Frame",spSF)
-		row.LayoutOrder=i; row.Size=UDim2.new(1,0,0,34)
-		row.BackgroundColor3=C.bg; row.BorderSizePixel=0
-		rnd(row,7); mkStroke(row,C.border)
-
-		local nLbl=mkLbl(row,sp.name,9,Enum.Font.GothamBold,C.txt)
-		nLbl.Size=UDim2.new(1,-95,1,0); nLbl.Position=UDim2.new(0,8,0,0)
-
-		local goBtn=mkBtn(row,"Pergi",C.accent,C.bg,8.5)
-		goBtn.Size=UDim2.new(0,40,0,22); goBtn.Position=UDim2.new(1,-88,0.5,-11)
-
-		local delBtn=mkBtn(row,"Hapus",C.card,C.dim,8.5)
-		delBtn.Size=UDim2.new(0,40,0,22); delBtn.Position=UDim2.new(1,-44,0.5,-11)
-		mkStroke(delBtn,C.border)
-
-		local ci=i; local cp=Vector3.new(sp.x,sp.y,sp.z)
-		goBtn.MouseButton1Click:Connect(function()
-			doTeleport(cp); stateL.Text="Pindah ke "..sp.name
-		end)
-		delBtn.MouseButton1Click:Connect(function()
-			table.remove(spots,ci); saveSpots(); renderSpots()
-		end)
-	end
-	spSF.CanvasSize=UDim2.new(0,0,0,#spots*38+4)
-end
-renderSpots()
-
-saveSpotBtn.MouseButton1Click:Connect(function()
-	local nm=nameBox.Text:match("^%s*(.-)%s*$")
-	if nm=="" then nm="Spot "..(#spots+1) end
-	if #spots>=MAX_SPOTS then stateL.Text="Max "..MAX_SPOTS.." spot"; return end
-	local ch=me.Character; local root=ch and ch:FindFirstChild("HumanoidRootPart")
-	if not root then return end
-	local p=root.Position
-	table.insert(spots,{name=nm,x=p.X,y=p.Y,z=p.Z})
-	saveSpots(); nameBox.Text=""; renderSpots()
-end)
-
--- ══ TAB 3: SETING ═══════════════════════════════════
-local pS=panels["Seting"]
-local function sSec(lbl,y)
-	local l=mkLbl(pS,lbl,7,Enum.Font.GothamBold,C.dim)
-	l.Size=UDim2.new(1,-16,0,12); l.Position=UDim2.new(0,8,0,y); return l
-end
-local sy=8
-sSec("PEMANCIAN",sy); sy=sy+14
-mkToggle(pS,sy,"Jitter Timing Cast","Variasi durasi lempar pancing",CFG.jitter,function(v) CFG.jitter=v end); sy=sy+40
-mkToggle(pS,sy,"Jitter Posisi Kursor","Variasi posisi koordinat klik",CFG.coordJitter,function(v) CFG.coordJitter=v end); sy=sy+40
-mkToggle(pS,sy,"Istirahat Otomatis","Jeda otomatis setiap 25 ikan",CFG.fatigueOn,function(v) CFG.fatigueOn=v end); sy=sy+40
-sSec("PERFORMA & UTILITAS",sy); sy=sy+14
-mkToggle(pS,sy,"Adaptasi Frame Time","Toleransi saat FPS rendah",CFG.netAdapt,function(v) CFG.netAdapt=v end); sy=sy+40
-mkToggle(pS,sy,"Auto Kembali ke Spot","Teleport otomatis setelah respawn",CFG.autoRejoin,function(v) CFG.autoRejoin=v end); sy=sy+40
-mkToggle(pS,sy,"Anti-AFK Mouse Sweep","Simulasi gerakan mouse anti-idle",CFG.antiAFK,function(v) CFG.antiAFK=v end); sy=sy+40
-mkToggle(pS,sy,"Watchdog Auto-Reset","Reset otomatis jika sistem macet",CFG.watchdog,function(v) CFG.watchdog=v end); sy=sy+40
-pS.CanvasSize=UDim2.new(0,0,0,sy+10)
-
--- ══ TAB 4: NOTIF ═══════════════════════════════════
-local pN=panels["Notif"]
-local ny=8
-local wLbl=mkLbl(pN,"DISCORD WEBHOOK NOTIFIKASI",7.5,Enum.Font.GothamBold,C.dim)
-wLbl.Size=UDim2.new(1,-16,0,12); wLbl.Position=UDim2.new(0,8,0,ny)
-ny=ny+16
-
-local wBox=Instance.new("TextBox",pN)
-wBox.Size=UDim2.new(1,-16,0,28); wBox.Position=UDim2.new(0,8,0,ny)
-wBox.BackgroundColor3=C.bg; wBox.TextColor3=C.txt
-wBox.PlaceholderText="https://discord.com/api/webhooks/..."
-wBox.PlaceholderColor3=C.muted; wBox.Text=webhookURL
-wBox.ClearTextOnFocus=false; wBox.Font=Enum.Font.Gotham
-wBox.TextSize=8.5; wBox.TextXAlignment=Enum.TextXAlignment.Left
-wBox.BorderSizePixel=0; rnd(wBox,7); mkStroke(wBox,C.border)
-Instance.new("UIPadding",wBox).PaddingLeft=UDim.new(0,8)
-wBox.FocusLost:Connect(function() webhookURL=wBox.Text end); ny=ny+34
-
-mkToggle(pN,ny,"Aktifkan Notifikasi","Kirim update hasil tangkapan ke Discord",false,function(v) webhookOn=v end); ny=ny+42
-
-local testBtn=mkBtn(pN,"Kirim Test Notifikasi",C.bg,C.dim,9)
-testBtn.Size=UDim2.new(1,-16,0,28); testBtn.Position=UDim2.new(0,8,0,ny)
-rnd(testBtn,7); mkStroke(testBtn,C.border)
-testBtn.MouseButton1Click:Connect(function()
-	sendWebhook("Test Notifikasi","Webhook terhubung dari NasiHub.",0xb49352)
-end); ny=ny+34
-
-local nInfo=mkLbl(pN,"Notifikasi otomatis dikirim setiap kelipatan 10 ikan.",7.5,Enum.Font.Gotham,C.muted)
-nInfo.Size=UDim2.new(1,-16,0,16); nInfo.Position=UDim2.new(0,8,0,ny)
-pN.CanvasSize=UDim2.new(0,0,0,ny+24)
-
--- ══ TAB 5: LOG ══════════════════════════════════════
-local pL=panels["Log"]
-local logEnabled=false
-
-local logToggle=mkBtn(pL,"Log: OFF",C.bg,C.muted,8.5)
-logToggle.Size=UDim2.new(0,68,0,24); logToggle.Position=UDim2.new(0,8,0,8)
-mkStroke(logToggle,C.border)
-
-local logClear=mkBtn(pL,"Clear",C.bg,C.muted,8.5)
-logClear.Size=UDim2.new(0,54,0,24); logClear.Position=UDim2.new(0,80,0,8)
-mkStroke(logClear,C.border)
-
-local logSF=Instance.new("ScrollingFrame",pL)
-logSF.Size=UDim2.new(1,-16,1,-42); logSF.Position=UDim2.new(0,8,0,36)
-logSF.BackgroundColor3=C.bg; logSF.BorderSizePixel=0
-rnd(logSF,7); mkStroke(logSF,C.border)
-logSF.CanvasSize=UDim2.new(0,0,0,0); logSF.ScrollBarThickness=2
-logSF.ScrollBarImageColor3=C.border
-do
-	local lp=Instance.new("UIPadding",logSF)
-	lp.PaddingTop=UDim.new(0,4); lp.PaddingLeft=UDim.new(0,6)
-	lp.PaddingRight=UDim.new(0,4); lp.PaddingBottom=UDim.new(0,4)
-end
-local logLL=Instance.new("UIListLayout",logSF)
-logLL.SortOrder=Enum.SortOrder.LayoutOrder; logLL.Padding=UDim.new(0,1)
-local logN=0
-addLog = function(txt)
-	if not logEnabled then return end
-	logN=logN+1
-	local row=Instance.new("TextLabel",logSF)
-	row.LayoutOrder=logN; row.Size=UDim2.new(1,0,0,13)
-	row.BackgroundTransparency=1
-	row.Text=string.format("[%s] %s",os.date("%H:%M:%S"),tostring(txt))
-	row.TextColor3=C.dim; row.Font=Enum.Font.Gotham
-	row.TextSize=8; row.TextXAlignment=Enum.TextXAlignment.Left
-	row.TextWrapped=true
-	task.defer(function()
-		logSF.CanvasSize=UDim2.new(0,0,0,logLL.AbsoluteContentSize.Y+8)
-		logSF.CanvasPosition=Vector2.new(0,math.huge)
-	end)
-	local kids={}
-	for _,k in ipairs(logSF:GetChildren()) do if k:IsA("TextLabel") then kids[#kids+1]=k end end
-	if #kids>80 then kids[1]:Destroy() end
-end
-logToggle.MouseButton1Click:Connect(function()
-	logEnabled=not logEnabled
-	logToggle.Text=logEnabled and "Log: ON" or "Log: OFF"
-	logToggle.TextColor3=logEnabled and C.accent or C.muted
-end)
-logClear.MouseButton1Click:Connect(function()
-	for _,k in ipairs(logSF:GetChildren()) do if k:IsA("TextLabel") then k:Destroy() end end
-	logSF.CanvasSize=UDim2.new(0,0,0,0); logN=0
-end)
-
--- ════════════════════════════════════════════════════
--- FISHING ENGINE
--- ════════════════════════════════════════════════════
-
-local function trulyVis(obj)
-	if not obj or typeof(obj) ~= "Instance" then return false end
-	if not obj:IsA("GuiObject") or not obj.Visible then return false end
-	local ok, sz = pcall(function() return obj.AbsoluteSize end)
-	if not ok or sz.X <= 0 or sz.Y <= 0 then return false end
-	local cur = obj.Parent
-	while cur and cur ~= game do
-		if cur:IsA("ScreenGui") then
-			if not cur.Enabled then return false end; break
-		elseif cur:IsA("GuiObject") then
-			if not cur.Visible then return false end
-		end
-		cur = cur.Parent
-	end
-	return true
-end
-
-local function normalizeToolName(name)
-	return tostring(name or ""):lower():gsub("%s+", "")
-end
-
-local function isFishingTool(tool)
-	if not tool or not tool:IsA("Tool") then
-		return false
-	end
-
-	local n = normalizeToolName(tool.Name)
-
-	for _, genericName in ipairs(FISH_TOOLS) do
-		local g = normalizeToolName(genericName)
-		if n == g or n:find(g, 1, true) then
-			return true
-		end
-	end
-
-	for _, rod in ipairs(RODS) do
-		local rn = normalizeToolName(rod.n)
-		if n == rn then
-			return true
-		end
-	end
-
-	return false
-end
-
-local function syncRodProfile(tool)
-	if not tool then
-		return
-	end
-
-	local n = normalizeToolName(tool.Name)
-
-	for i, rod in ipairs(RODS) do
-		if n == normalizeToolName(rod.n) then
-			rodIdx = i
-			if updateRodUI then updateRodUI() end
-			return
-		end
-	end
-end
-
-local function findAndEquipRod()
-	local ch = me.Character
-	if not ch then return nil end
-
-	local hum = ch:FindFirstChildOfClass("Humanoid")
-	if not hum then return nil end
-
-	local equipped = ch:FindFirstChildWhichIsA("Tool")
-	if isFishingTool(equipped) then
-		syncRodProfile(equipped)
-		return equipped
-	end
-
-	local bp = me:FindFirstChild("Backpack")
-	if not bp then return nil end
-
-	for _, item in ipairs(bp:GetChildren()) do
-		if isFishingTool(item) then
-			local ok = pcall(function()
-				hum:EquipTool(item)
-			end)
-
-			if ok then
-				task.wait(0.35)
-				local newTool = ch:FindFirstChildWhichIsA("Tool")
-				if isFishingTool(newTool) then
-					syncRodProfile(newTool)
-					return newTool
-				end
-			end
-		end
-	end
-
-	return nil
-end
-
-local function setSpace(v, force)
-	if isSpace == v and not force then return end
-	local now = os.clock()
-	if not force and (now - lastSpTgl) < 0.03 then return end
-	pcall(function() VIM:SendKeyEvent(v, Enum.KeyCode.Space, false, game) end)
-	isSpace = v; lastSpTgl = now
-end
-
-local function getBars()
-	if wBar and rBar and wBar.Parent and rBar.Parent
-		and trulyVis(wBar) and trulyVis(rBar) then
-		return wBar, rBar
-	end
-	local now = os.clock()
-	local scanInterval = frameSlow() and 0.10 or 0.05
-	if now - lastScan < scanInterval then return nil, nil end
-	lastScan = now; wBar = nil; rBar = nil
-
-	local pg = me:FindFirstChild("PlayerGui")
-	if not pg then return nil, nil end
-
-	-- Pass 1: nama
-	for _, v in ipairs(pg:GetDescendants()) do
-		if v:IsA("GuiObject") and trulyVis(v) then
-			local ln  = v.Name:lower()
-			local par = v.Parent
-			if par and par:IsA("GuiObject") then
-				local isW = ln == "whitebar" or ln == "playerbar"
-					or (ln:find("white") and ln:find("bar"))
-				if isW then
-					for _, sib in ipairs(par:GetChildren()) do
-						if sib ~= v and sib:IsA("GuiObject") and trulyVis(sib) then
-							local sn = sib.Name:lower()
-							if sn:find("red") or sn:find("target") or sn:find("goal") then
-								if v.AbsoluteSize.X > 10 then
-									wBar = v; rBar = sib; return v, sib
-								end
-							end
-						end
-					end
-				end
-			end
-		end
-	end
-
-	-- Pass 2: warna
-	for _, v in ipairs(pg:GetDescendants()) do
-		if v:IsA("GuiObject") and trulyVis(v)
-			and v.AbsoluteSize.X > 12 and v.AbsoluteSize.Y > 5 then
-			local c   = v.BackgroundColor3
-			local par = v.Parent
-			if c.R > 0.78 and c.G > 0.78 and c.B > 0.78
-				and par and par:IsA("GuiObject") then
-				for _, sib in ipairs(par:GetChildren()) do
-					if sib ~= v and sib:IsA("GuiObject") and trulyVis(sib)
-						and sib.AbsoluteSize.X > 12 then
-						local sc = sib.BackgroundColor3
-						if sc.R > 0.46 and sc.G < 0.22 and sc.B < 0.22 then
-							wBar = v; rBar = sib; return v, sib
-						end
-					end
-				end
-			end
-		end
-	end
-	return nil, nil
-end
-
-local function doFatigue()
-	if not CFG.fatigueOn then return end
-	fatCnt = fatCnt + 1
-	if fatCnt < CFG.fatEvery then return end
-	fatCnt = 0
-	addLog("Istirahat " .. CFG.fatDur .. "s")
-	setSpace(false, true)
-	setPhase(0)
-	stateL.Text = "Istirahat " .. CFG.fatDur .. "s"
-	setDot(C.accent)
-	task.wait(CFG.fatDur)
-	setDot(C.accent)
-end
-
-doReset = function(reason)
-	castSess = castSess + 1
-
-	fishState = "IDLE"
-	isSpace = false
-	isCasting = false
-	successDone = false
-	mgEverSeen = false
-	mgStarted = false
-	mgLastSeen = 0
-
-	wBar = nil
-	rBar = nil
-	lastScan = 0
-	lastWC = nil
-	wVel = 0
-	idleAt = os.clock()
-
-	pcall(function()
-		VIM:SendKeyEvent(false, Enum.KeyCode.Space, false, game)
-	end)
-
-	setPhase(0)
-
-	if active then
-		stateL.Text = "Idle"
-		setDot(C.accent)
-	end
-
-	if reason then
-		addLog("Reset: " .. tostring(reason))
-	end
-end
-
-local function onCatch(why)
-	if successDone then return end
-	successDone = true
-	setSpace(false, true)
-	fishState = "DONE"; setPhase(4)
-	fishCount = fishCount + 1
-	fishCountL.Text = "Tangkapan: " .. fishCount .. " ikan"
-	stateL.Text     = "Caught #" .. fishCount
-	setDot(C.accent)
-	addLog("Caught #" .. fishCount .. "  (" .. why .. ")")
-
-	if fishCount == 1 or fishCount % 10 == 0 then
-		sendWebhook("Update Tangkapan",
-			string.format("Sudah menangkap **%d ikan** dalam sesi ini.", fishCount),
-			0xb49352)
-	end
-
-	doFatigue()
-
-	local sess = castSess
-	task.delay(jt(CFG.recastDly, 0.12), function()
-		if not _S.alive or not active or castSess ~= sess then return end
-		doReset(nil)
-		task.wait(0.06)
-		if active then fishState = "IDLE"; idleAt = os.clock() end
-	end)
-end
-
--- Heartbeat — frame time update & minigame tracker
-local hbLast = 0
+-- ── MAIN HEARTBEAT ────────────────────────────────────────────
+local _hbLast = 0
 local hbConn = RS.Heartbeat:Connect(function(dt)
-	updateFrameTime(dt)
-	if not _S.alive then return end
-	if not active then
-		if isSpace then setSpace(false, true) end
-		return
-	end
-	local now = os.clock()
-	if now - hbLast < 0.016 then return end
-	hbLast = now
-	safe(function()
-		local rod = RODS[rodIdx]
+    updateFrameTime(dt)
+    if not _S.alive then return end
 
-		if fishState == "WAITING" then
-			local el = now - biteStart
-			setPct(math.clamp(el / CFG.biteWait, 0, 1))
-			stateL.Text = string.format("Menunggu... %.0fs", math.max(0, CFG.biteWait - el))
-			if el >= CFG.biteWait then
-				fishState   = "MINIGAME"
-				mgStart     = now
-				mgEverSeen  = false
-				mgStarted   = false
-				mgLastSeen  = 0
-				successDone = false
-				wBar        = nil
-				rBar        = nil
-				lastScan    = 0
-				lastWC      = nil
-				wVel        = 0
-				lastWTime   = now
-				setSpace(false, true)
-				setPhase(3)
-				setPct(0)
-				stateL.Text = "Minigame"
-				addLog("Minigame started")
-			end
-			return
-		end
+    if not _S.active then
+        if _spaceHeld then releaseAllInput() end
+        return
+    end
 
-		if fishState ~= "MINIGAME" then return end
+    local now = os.clock()
+    if now - _hbLast < 0.016 then return end
+    _hbLast = now
 
-		local el = now - mgStart
-		local timeout = (11 + rod.prog * 3.2) * (frameSlow() and 1.4 or 1.0)
-		setPct(math.clamp(el / timeout, 0, 1))
-		if el >= timeout then
-			setSpace(false, true)
-			stateL.Text = "Minigame timeout"
-			addLog("Minigame timeout")
-			doReset("minigame-timeout")
-			return
-		end
+    local ok, err = xpcall(function()
+        if fishState == STATES.REELING then
+            tickMinigame(now)
+        elseif fishState == STATES.WAITING_BITE then
+            local el = now - _biteAt
+            setPhaseBar(0.25 + math.clamp(el / CFG.fishing.biteTimeout, 0, 1) * 0.25)
+            stateL.Text = string.format("Waiting... %.0fs", math.max(0, CFG.fishing.biteTimeout - el))
+            if el >= CFG.fishing.biteTimeout then
+                fishState   = STATES.REELING
+                _mgAt       = now
+                _mgEverSeen = false
+                _mgStarted  = false
+                _mgLastSeen = 0
+                resultState = "UNKNOWN"
+                _wBar = nil; _rBar = nil; _lastScan = 0
+                releaseAllInput()
+                setPhaseBar(0.5)
+                stateL.Text = "Reeling..."
+                setDot(C.accent)
+            end
+        end
+    end, function(e) return e end)
 
-		local wb, rb = getBars()
-		if wb and rb and trulyVis(wb) and trulyVis(rb) then
-			mgEverSeen = true
-			mgLastSeen = now
-			if not mgStarted then
-				mgStarted = true
-				setSpace(false, true)
-				lastWC = nil
-				wVel = 0
-				lastWTime = now
-			end
-
-			local wC    = wb.AbsolutePosition.X + wb.AbsoluteSize.X * 0.5
-			local rL    = rb.AbsolutePosition.X
-			local rR    = rL + rb.AbsoluteSize.X
-			local rC    = (rL + rR) * 0.5
-			local rawDt = now - lastWTime
-			local dt    = math.clamp(rawDt, 0.007, 0.16)
-
-			if lastWC then
-				local inst = (wC - lastWC) / dt
-				local sm   = math.clamp(0.26 / rod.lure, 0.10, 0.30)
-				wVel = wVel * (1 - sm) + inst * sm
-			end
-			lastWC = wC
-			lastWTime = now
-
-			local lagFactor = frameSlow() and 1.5 or 1.0
-			local ahead  = math.clamp(math.abs(wVel) / 1650, 0.03, 0.17) * math.sqrt(rod.lure) * lagFactor
-			local pred   = wC + wVel * ahead
-			local rw     = math.max(rb.AbsoluteSize.X, 1)
-			local lag    = math.clamp(rawDt / 0.05 - 1, 0, 1.5)
-			local tol    = math.clamp(rw * (0.16 + lag * 0.14 + rod.lure * 0.025), 4, 28)
-			local inside = pred >= (rL - tol) and pred <= (rR + tol)
-
-			if inside then
-				if     wC < rL then setSpace(true)
-				elseif wC > rR then setSpace(false)
-				else
-					local e = wC - rC
-					if math.abs(e) > tol * 0.4 then setSpace(e < 0) end
-				end
-			else
-				local e = rC - pred
-				if     e >  tol then setSpace(true)
-				elseif e < -tol then setSpace(false)
-				elseif math.abs(wVel) > 130 then setSpace(wVel < 0) end
-			end
-			stateL.Text = string.format("Playing... %.0fs", el)
-		else
-			if mgStarted and mgEverSeen and mgLastSeen > 0 and not successDone and (now - mgLastSeen) >= 0.20 then
-				setSpace(false, true)
-				onCatch("bar-gone")
-			elseif not mgEverSeen then
-				local beat = math.floor((now - mgStart) * 3.0) % 2 == 0
-				setSpace(beat)
-				stateL.Text = string.format("Sync... %.0fs", el)
-			end
-		end
-	end)
+    if not ok then warn("[NF] hb error: " .. tostring(err)) end
 end)
-table.insert(_S.c, hbConn)
+table.insert(_S.connections, hbConn)
 
--- Cast loop
+-- ── CAST LOOP ────────────────────────────────────────────────
 task.spawn(function()
-	while _S.alive do
-		task.wait(0.14)
-		if _S.alive and active then
-			safe(function()
-				local ch  = me.Character
-				if not ch then return end
-				local hum = ch:FindFirstChildOfClass("Humanoid")
-				if not hum then return end
+    while _S.alive do
+        task.wait(0.15)
+        if not _S.alive then break end
+        if _S.active then
 
-				local tool = findAndEquipRod()
-				if not tool then
-					setJumpSuppressed(false)
-					stateL.Text = "Tidak ada rod!"
-					setDot(C.accent)
-					return
-				end
+        local ok2, err2 = xpcall(function()
+            local ch  = me.Character
+            local hum = ch and ch:FindFirstChildOfClass("Humanoid")
+            if not ch or not hum then return end
 
-				setJumpSuppressed(true)
+            local tool = equipBestRod()
+            if not tool then
+                stateL.Text = "No rod found"
+                setDot(C.dim)
+                return
+            end
 
-				if fishState == "IDLE" and not isCasting then
-					isCasting = true
-					castSess = castSess + 1
-					local sess = castSess
-					task.spawn(function()
-						if not _S.alive or not active or castSess ~= sess then
-							isCasting = false
-							return
-						end
-						local cam = workspace.CurrentCamera
-						if not cam then
-							isCasting = false
-							return
-						end
-						local rod = RODS[rodIdx]
-						local ctr = jv(cam.ViewportSize / 2)
-						fishState = "CASTING"
-						setPhase(1)
-						setPct(0)
-						stateL.Text = "Casting..."
-						setDot(C.accent)
-						pcall(function() tool:Activate() end)
-						pcall(function() VU:Button1Down(ctr, cam.CFrame) end)
+            rodL.Text = string.format("Rod: %s (src: %s)", _currentRod.name, _currentRod.source)
+            setJumpEnabled(false)
 
-						local lagMult = frameSlow() and 1.2 or 1.0
-						local dur = jt(CFG.castHold / math.max(1, math.sqrt(rod.lure) * 0.85), 0.09) * lagMult
-						local t0  = os.clock()
-						while os.clock() - t0 < dur do
-							task.wait(0.04)
-							if not active or not _S.alive or castSess ~= sess then
-								pcall(function() VU:Button1Up(ctr, cam.CFrame) end)
-								isCasting = false
-								return
-							end
-							setPct((os.clock() - t0) / dur)
-						end
-						pcall(function() VU:Button1Up(ctr, cam.CFrame) end)
-						setPct(1)
-						task.wait(jt(0.12, 0.08))
-						if not active or not _S.alive or castSess ~= sess then
-							isCasting = false
-							return
-						end
-						fishState = "WAITING"
-						biteStart = os.clock()
-						setPhase(2)
-						setPct(0)
-						stateL.Text = "Menunggu..."
-						setDot(C.accent)
-						addLog("Cast #" .. castSess)
-						isCasting = false
-					end)
-				end
-			end)
-		end
-	end
+            if fishState == STATES.IDLE and not _casting then
+                _casting = true
+                local gen = generation
+                task.spawn(function()
+                    if gen ~= generation or not _S.active or not _S.alive then
+                        _casting = false; return
+                    end
+
+                    local cam = workspace.CurrentCamera
+                    if not cam then _casting = false; return end
+
+                    local rod  = _currentRod
+                    local ctr  = cam.ViewportSize / 2
+                    local slow = frameSlow
+                    local lagM = slow and 1.2 or 1.0
+                    local dur  = CFG.fishing.castHold / math.max(1, math.sqrt(rod.lure)*0.85) * lagM
+
+                    fishState = STATES.CASTING
+                    stateL.Text = "Casting..."
+                    setDot(C.accent)
+                    setPhaseBar(0.05)
+
+                    pcall(function() tool:Activate() end)
+                    if Capabilities.vu then
+                        pcall(function() VU:Button1Down(ctr, cam.CFrame) end)
+                    end
+
+                    local t0 = os.clock()
+                    while os.clock()-t0 < dur do
+                        task.wait(0.04)
+                        if gen ~= generation or not _S.active or not _S.alive then
+                            if Capabilities.vu then pcall(function() VU:Button1Up(ctr,cam.CFrame) end) end
+                            _casting = false; return
+                        end
+                        setPhaseBar(math.clamp((os.clock()-t0)/dur*0.25, 0, 0.25))
+                    end
+
+                    if Capabilities.vu then
+                        pcall(function() VU:Button1Up(ctr, cam.CFrame) end)
+                    end
+                    task.wait(0.12)
+
+                    if gen ~= generation or not _S.active or not _S.alive then _casting=false; return end
+
+                    fishState = STATES.WAITING_BITE
+                    _biteAt   = os.clock()
+                    setPhaseBar(0.25)
+                    stateL.Text = "Waiting bite..."
+                    _casting = false
+                end)
+            end
+        end, function(e) return e end)
+
+        if not ok2 then warn("[NF] cast error: " .. tostring(err2)) end
+        end  -- if _S.active
+    end
 end)
 
--- Watchdog — 5 detik sekali
+-- ── WATCHDOG ─────────────────────────────────────────────────
 task.spawn(function()
-	while _S.alive do
-		task.wait(5)
-		if _S.alive and active and CFG.watchdog then
-			local now = os.clock()
-			local idleThresh = frameSlow() and 18 or 12
-			local waitThresh = CFG.biteWait + (frameSlow() and 14 or 9)
-			local evt = nil
-			if   fishState == "IDLE"    and not isCasting and (now - idleAt)    > idleThresh then
-				evt = "idle-lock"
-			elseif fishState == "WAITING" and (now - biteStart) > waitThresh then
-				evt = "bite-timeout"
-			elseif fishState == "CASTING" and not isCasting and (now - idleAt)  > 10 then
-				evt = "cast-stuck"
-			end
-			if evt then
-				addLog("Watchdog: " .. evt)
-				sendWebhook("Watchdog Reset",
-					"Bot mengalami stuck (" .. evt .. ") dan melakukan reset otomatis.", 0xc47830)
-				doReset(evt)
-			end
-		end
-	end
+    while _S.alive do
+        task.wait(5)
+        if not _S.alive then break end
+        if not _S.active then _idleAt = os.clock() end
+        if _S.active then
+            local now  = os.clock()
+            local slow = frameSlow
+            if fishState == STATES.IDLE and not _casting and (now-_idleAt) > (slow and 22 or CFG.fishing.watchdogIdle) then
+                warn("[NF] watchdog: idle-lock"); doReset("watchdog-idle")
+            elseif fishState == STATES.WAITING_BITE and (now-_biteAt) > (CFG.fishing.biteTimeout + CFG.fishing.watchdogWait) then
+                warn("[NF] watchdog: bite-timeout"); doReset("watchdog-bite")
+            elseif fishState == STATES.CASTING and not _casting and (now-_idleAt) > CFG.fishing.watchdogCast then
+                warn("[NF] watchdog: cast-stuck"); doReset("watchdog-cast")
+            end
+        end
+    end
 end)
 
--- Anti-AFK
+-- ── SESSION STAT UPDATER ──────────────────────────────────────
 task.spawn(function()
-	while _S.alive do
-		task.wait(math.random(88, 148))
-		if not _S.alive then break end
-		if CFG.antiAFK then
-			pcall(function()
-				local cam = workspace.CurrentCamera; if not cam then return end
-				local sz = cam.ViewportSize
-				VU:MouseMoveEvent(
-					Vector2.new(sz.X/2 + math.random(-55,55), sz.Y/2 + math.random(-40,40)),
-					cam.CFrame)
-			end)
-		end
-	end
+    while _S.alive do
+        task.wait(1)
+        if _S.active then
+            cntL.Text = string.format("Confirmed: %d | Attempts: %d | Unknown: %d",
+                fishConfirmed, fishAttempts, fishUnknown)
+        end
+    end
 end)
 
-local idledConn = me.Idled:Connect(function()
-	if not CFG.antiAFK then return end
-	pcall(function()
-		local cam = workspace.CurrentCamera; if not cam then return end
-		VU:Button2Down(Vector2.new(0,0), cam.CFrame)
-		task.wait(0.1)
-		VU:Button2Up(Vector2.new(0,0), cam.CFrame)
-	end)
-end)
-table.insert(_S.c, idledConn)
+-- ── FISHING ON/OFF TOGGLE ─────────────────────────────────────
+fishSw.MouseButton1Click:Connect(function()
+    if not _S.alive then return end
+    _S.active = not _S.active
+    TS:Create(fishSw,TweenInfo.new(0.12),{BackgroundColor3=_S.active and C.swOn or C.swOff}):Play()
+    TS:Create(fishKnob,TweenInfo.new(0.12),{
+        Position=_S.active and UDim2.new(1,-18,0.5,-8) or UDim2.new(0,2,0.5,-8)
+    }):Play()
 
--- Character Added lifecycle handler
-local function onCharAdded(char)
-	setJumpSuppressed(false)
-	if not CFG.autoRejoin or not lastAFKPos then return end
-	task.spawn(function()
-		local root = char:WaitForChild("HumanoidRootPart", 8)
-		if not root then return end
-		task.wait(2.5)
-		if not _S.alive or not lastAFKPos then return end
-		spawnPlat(lastAFKPos)
-		task.wait(0.12)
-		root.CFrame = CFrame.new(lastAFKPos)
-		addLog("Auto-kembali ke spot terakhir")
-		task.wait(0.5)
-		if active and doReset then doReset("auto-rejoin") end
-	end)
-end
-local charConn = me.CharacterAdded:Connect(onCharAdded)
-table.insert(_S.c, charConn)
-
--- Startup notification
-task.delay(1.2, function()
-	sendWebhook("NasiHub Aktif", "NasiHub v2.0 berhasil dijalankan.", 0xb49352)
+    if _S.active then
+        sessStart    = os.clock()
+        fishAttempts = 0; fishConfirmed = 0; fishFailed = 0; fishUnknown = 0
+        doReset("start")
+        setDot(C.accent)
+        stateL.Text = "Starting..."
+        sendWebhook("Auto Fishing ON", "NasiHub Nazhan Fish v3.0 started.", 0xb49352)
+    else
+        doReset("stopped")
+        restoreCharState()
+        setDot(C.muted)
+        stateL.Text = "Idle"
+        cntL.Text   = string.format("Confirmed: %d | Attempts: %d | Unknown: %d",
+            fishConfirmed, fishAttempts, fishUnknown)
+        sendWebhook("Auto Fishing OFF", "Fishing stopped.", 0x888888)
+    end
 end)
 
-addLog("NasiHub v2.0 siap.")
-setPhase(0)
+-- ── CHARACTER ADDED ───────────────────────────────────────────
+local charConn = me.CharacterAdded:Connect(function(char)
+    saveCharState(char)
+    _wBar = nil; _rBar = nil; _pBar = nil; _lastScan = 0
+    releaseAllInput()
+    setJumpEnabled(true)
+    if _S.active then
+        doReset("respawn")
+    end
+end)
+table.insert(_S.connections, charConn)
+
+print("[NF] Nazhan Fish v3.0 loaded.")
+print("[NF] bar-gone alone = RESULT_UNCONFIRMED (not counted).")
+print("[NF] Rod source shown in UI: LIVE / FALLBACK / UNKNOWN.")
