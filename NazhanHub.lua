@@ -1,6 +1,6 @@
 -- IDH Hub | Indo Hangout client helper
 
-local BUILD = "0.2.3"
+local BUILD = "0.2.4"
 local StarterGui = game:GetService("StarterGui")
 local env = _G
 if type(getgenv)=="function" then
@@ -544,9 +544,11 @@ function S.runSelfTest(options)
 				add(S.lastReel>reelBefore and "PASS" or "SKIP","Input Assist",S.lastReel>reelBefore and "reeling event diterima" or "belum ada bite selama test")
 			else add("FAIL","Auto Fishing","rod atau remote tidak tersedia") end
 
-			local fastReady=rodRemote and findTool("rod")
-			S.fastCatch=true; local fastState=S.fastCatch; S.fastCatch=false
-			add(fastReady and fastState and "PASS" or "FAIL","Fast Catch toggle","request hanya dikirim saat StartReeling")
+			local fastReady=rodRemote and findTool("rod"); local fastReelBefore=S.lastReel
+			if fastReady then
+				S.setFishing(true,true); task.wait(options.fastCatchWait or 15); S.setFishing(false,false)
+				add(S.lastReel>fastReelBefore and "PASS" or "SKIP","Fast Catch",S.lastReel>fastReelBefore and "StartReeling memicu direct request" or "belum ada bite selama test")
+			else add("FAIL","Fast Catch","rod atau remote tidak tersedia") end
 
 			local targetBefore=S.targets
 			if pickaxeRemote and findTool("pickaxe") and crystalFolder() then
