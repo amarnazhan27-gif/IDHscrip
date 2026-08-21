@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="300" viewBox="0 0 1200 300" role="img" aria-labelledby="title desc">
+  <title id="title">IDH Hub</title>
+  <desc id="desc">Lightweight Indo Hangout client helper</desc>
+  <rect width="1200" height="300" rx="24" fill="#0f1115"/>
+  <path d="M0 236h1200v64H0z" fill="#16191e"/>
+  <path d="M0 236h1200" stroke="#2b3039"/>
+  <g transform="translate(92 60)" fill="none" stroke="#469cff" stroke-width="10" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M26 12v122c0 27 22 48 49 48s49-21 49-48c0-23-18-41-41-41-18 0-33 14-33 32 0 13 11 24 24 24"/>
+    <path d="M26 12h76"/>
+    <circle cx="112" cy="12" r="8" fill="#469cff" stroke="none"/>
+  </g>
+  <g font-family="Arial, Helvetica, sans-serif">
+    <text x="286" y="135" fill="#ebeef3" font-size="76" font-weight="700" letter-spacing="3">IDH HUB</text>
+    <text x="290" y="183" fill="#8b93a0" font-size="24" letter-spacing="1">INDO HANGOUT CLIENT HELPER</text>
+    <text x="290" y="251" fill="#469cff" font-size="18" font-weight="700" letter-spacing="2">SMALL  •  AUDITABLE  •  MOBILE-FIRST</text>
+  </g>
+</svg>
