@@ -72,6 +72,7 @@ local mgStarted   = false
 local successDone = false
 local isCasting   = false
 local wBar, rBar  = nil, nil
+local progressBar = nil
 local lastScan    = 0
 local lastWC      = nil
 local lastWTime   = os.clock()
@@ -904,6 +905,20 @@ local function setSpace(v, force)
 end
 
 local function getBars()
+	-- IDH dump: PlayerGui/Reeling/MainFrame/Frame/{WhiteBar,RedBar}.
+	-- Prefer the exact hierarchy before falling back to heuristic scans.
+	local pg = me:FindFirstChild("PlayerGui")
+	local reeling = pg and pg:FindFirstChild("Reeling")
+	local mainFrame = reeling and reeling:FindFirstChild("MainFrame")
+	local frame = mainFrame and mainFrame:FindFirstChild("Frame")
+	local exactWhite = frame and frame:FindFirstChild("WhiteBar")
+	local exactRed = frame and frame:FindFirstChild("RedBar")
+	progressBar = mainFrame and mainFrame:FindFirstChild("ProgressBg")
+		and mainFrame.ProgressBg:FindFirstChild("ProgressBar") or nil
+	if exactWhite and exactRed and trulyVis(exactWhite) and trulyVis(exactRed) then
+		wBar, rBar = exactWhite, exactRed
+		return wBar, rBar
+	end
 	if wBar and rBar and wBar.Parent and rBar.Parent
 		and trulyVis(wBar) and trulyVis(rBar) then
 		return wBar, rBar
@@ -914,7 +929,6 @@ local function getBars()
 	if now - lastScan < scanInterval then return nil, nil end
 	lastScan = now; wBar = nil; rBar = nil
 
-	local pg = me:FindFirstChild("PlayerGui")
 	if not pg then return nil, nil end
 
 	-- Pass 1: nama
@@ -985,7 +999,7 @@ doReset = function(reason)
 	successDone = false
 	mgEverSeen  = false
 	mgStarted   = false
-	wBar        = nil; rBar = nil
+	wBar        = nil; rBar = nil; progressBar = nil
 	lastScan    = 0; lastWC = nil; wVel = 0; mgLastSeen = 0
 	castSess    = castSess + 1
 	idleAt      = os.clock()
@@ -1060,7 +1074,8 @@ local hbConn = RS.Heartbeat:Connect(function(dt)
 		local timeout = (11 + rod.prog * 3.2) * (lagging() and 1.4 or 1.0)
 		setPct(math.clamp(el / timeout, 0, 1))
 		if el >= timeout then
-			setSpace(false, true); onCatch("timeout"); return
+			-- A timeout is not proof of a catch. Reset without incrementing stats.
+			setSpace(false, true); doReset("minigame-timeout"); return
 		end
 
 		local wb, rb = getBars()
@@ -1108,11 +1123,15 @@ local hbConn = RS.Heartbeat:Connect(function(dt)
 				elseif math.abs(wVel) > 130 then setSpace(wVel < 0) end
 			end
 			stateL.Text = string.format("Playing... %.0fs", el)
+			if progressBar and progressBar.Parent and progressBar.Size.X.Scale >= 0.985 then
+				-- The stock ReelingLocalScript fires Rod("Catch", "Catch") at 1.0.
+				onCatch("progress-complete")
+			end
 		else
 			if mgEverSeen then
-				-- bar hilang = minigame selesai
+				-- Bar disappearance alone can mean Catch or Miss; do not fake a catch.
 				if mgLastSeen > 0 and (now - mgLastSeen) >= 0.20 then
-					setSpace(false, true); onCatch("bar-gone")
+					setSpace(false, true); doReset("reeling-ended")
 				end
 			else
 				-- pre-bar sync
