@@ -52,6 +52,27 @@ Error seperti `UIStroke is not a valid member of TextButton` dari
 `Script 'LocalScript', Line 2684` bukan berasal dari hub ini. Abaikan error game
 tersebut dan cari prefix `[IDH Hub ...]` agar laporan bug tidak tercampur.
 
+### Runtime self-test
+
+Hub menyediakan `runSelfTest()` untuk memeriksa dependency, GUI lifecycle,
+toggle lokal, fishing, dan mining. Hasil dicetak dengan prefix `[IDH Test]`.
+
+```lua
+local hub = loadstring(game:HttpGet("https://raw.githubusercontent.com/amarnazhan27-gif/IDHscrip/main/NazhanHub.lua", true))()
+hub.runSelfTest()
+```
+
+Copy Avatar dan Sell sengaja tidak dijalankan oleh default karena mengubah
+avatar atau inventory. Gunakan opsi berikut hanya jika perubahan tersebut
+memang diinginkan:
+
+```lua
+hub.runSelfTest({avatar = true, inventory = true})
+```
+
+`PASS` berarti client path atau request berhasil dijalankan. Itu belum menjadi
+bukti reward server sampai perubahan inventory/cash terlihat di game.
+
 ## Entry point terpisah
 
 File berikut tetap tersedia untuk pemakaian sederhana:

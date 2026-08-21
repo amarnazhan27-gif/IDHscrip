@@ -1,6 +1,6 @@
 -- IDH Hub | Indo Hangout client helper
 
-local BUILD = "0.2.2"
+local BUILD = "0.2.3"
 local StarterGui = game:GetService("StarterGui")
 local env = _G
 if type(getgenv)=="function" then
@@ -38,7 +38,7 @@ local me = Players.LocalPlayer
 local S = {
 	alive=true, fishing=false, fastCatch=false, reeling=false, mining=false,
 	antiAfk=true, lowGraphics=false, spaceDown=false, lastCast=0, lastReel=0,
-	casts=0, targets=0, connections={}
+	casts=0, targets=0, connections={}, version=BUILD
 }
 env.IDHHub = S
 
@@ -469,6 +469,7 @@ local function setLowGraphics(v)
 		end
 	end)
 end
+S.setLowGraphics=setLowGraphics
 toggle(pages.System,"Low Graphics","Kurangi efek visual lokal",false,setLowGraphics)
 local compat=card(pages.System,118)
 make("TextLabel",{
@@ -501,6 +502,84 @@ on(UIS.InputEnded,function(x) if x.UserInputType==Enum.UserInputType.MouseButton
 on(hideBtn.MouseButton1Click,function() window.Visible=false; bubble.Visible=true end)
 on(bubble.MouseButton1Click,function() bubble.Visible=false; window.Visible=true end)
 on(me.Idled,function() if S.antiAfk then pcall(function() VU:CaptureController(); VU:ClickButton2(Vector2.new()) end) end end)
+
+local function testOutput(status,name,detail)
+	local line="[IDH Test] "..status.." | "..name..(detail and " | "..tostring(detail) or "")
+	print(line)
+	if type(rconsoleprint)=="function" then pcall(rconsoleprint,line.."\n") end
+end
+
+function S.runSelfTest(options)
+	if S.testing then return false,"Self-test masih berjalan" end
+	options=type(options)=="table" and options or {}
+	S.testing=true; S.testResults={}
+	task.spawn(function()
+		local function add(status,name,detail)
+			table.insert(S.testResults,{status=status,name=name,detail=detail})
+			testOutput(status,name,detail)
+		end
+		local ok,err=xpcall(function()
+			add(gui.Parent and "PASS" or "FAIL","GUI parent",gui.Parent and gui.Parent:GetFullName() or "nil")
+			add(rodRemote and "PASS" or "FAIL","Rod remote",rodRemote and rodRemote:GetFullName() or "missing")
+			add(pickaxeRemote and "PASS" or "FAIL","Pickaxe remote",pickaxeRemote and pickaxeRemote:GetFullName() or "missing")
+			add(crystalFolder() and "PASS" or "FAIL","Crystal folder",crystalFolder() and #crystalFolder():GetChildren().." children" or "missing")
+			add(applyAvatarRemote and "PASS" or "FAIL","Avatar remote",applyAvatarRemote and applyAvatarRemote:GetFullName() or "missing")
+
+			window.Visible=false; bubble.Visible=true; task.wait(.15)
+			local hidden=not window.Visible and bubble.Visible
+			window.Visible=true; bubble.Visible=false
+			add(hidden and "PASS" or "FAIL","Hide and restore GUI")
+
+			local previousAfk=S.antiAfk; S.antiAfk=false; local changed=not S.antiAfk; S.antiAfk=previousAfk
+			add(changed and "PASS" or "FAIL","Anti-AFK toggle","Idled event tidak dipaksa")
+
+			setLowGraphics(true); task.wait(.3); local lowOn=S.lowGraphics
+			setLowGraphics(false); task.wait(.3)
+			add(lowOn and not S.lowGraphics and "PASS" or "FAIL","Low Graphics toggle","state dipulihkan")
+
+			local rod=findTool("rod"); local castBefore=S.casts; local reelBefore=S.lastReel
+			if rodRemote and rod then
+				S.setFishing(true,false); task.wait(options.fishingWait or 15); S.setFishing(false,false)
+				add(S.casts>castBefore and "PASS" or "FAIL","Auto Fishing cast",S.casts-castBefore.." cast")
+				add(S.lastReel>reelBefore and "PASS" or "SKIP","Input Assist",S.lastReel>reelBefore and "reeling event diterima" or "belum ada bite selama test")
+			else add("FAIL","Auto Fishing","rod atau remote tidak tersedia") end
+
+			local fastReady=rodRemote and findTool("rod")
+			S.fastCatch=true; local fastState=S.fastCatch; S.fastCatch=false
+			add(fastReady and fastState and "PASS" or "FAIL","Fast Catch toggle","request hanya dikirim saat StartReeling")
+
+			local targetBefore=S.targets
+			if pickaxeRemote and findTool("pickaxe") and crystalFolder() then
+				S.setMining(true); task.wait(options.miningWait or 8); S.setMining(false)
+				add(S.targets>targetBefore and "PASS" or "FAIL","Auto Mining",S.targets-targetBefore.." target acquired")
+			else add("FAIL","Auto Mining","pickaxe, remote, atau folder tidak tersedia") end
+
+			if options.avatar then
+				local callOk,avatarOk,avatarMsg=pcall(copyAvatar,options.player or "")
+				add(callOk and avatarOk and "PASS" or "FAIL","Copy Avatar",callOk and avatarMsg or avatarOk)
+			else add("SKIP","Copy Avatar","aktifkan options.avatar untuk mengubah avatar") end
+
+			if options.inventory then
+				local fishCall,fishOk,fishMsg=pcall(S.sellFish); add(fishCall and fishOk and "PASS" or "FAIL","Sell Fish",fishCall and fishMsg or fishOk)
+				local crystalCall,crystalOk,crystalMsg=pcall(S.sellCrystal); add(crystalCall and crystalOk and "PASS" or "FAIL","Sell Crystal",crystalCall and crystalMsg or crystalOk)
+			else
+				add("SKIP","Sell Fish","aktifkan options.inventory untuk menjual")
+				add("SKIP","Sell Crystal","aktifkan options.inventory untuk menjual")
+			end
+		end,trace)
+		S.setFishing(false,false); S.setMining(false); if S.lowGraphics then setLowGraphics(false) end
+		if not ok then add("FAIL","Self-test runtime",err) end
+		local passed,failed,skipped=0,0,0
+		for _,result in ipairs(S.testResults) do
+			if result.status=="PASS" then passed=passed+1 elseif result.status=="FAIL" then failed=failed+1 else skipped=skipped+1 end
+		end
+		S.testing=false
+		local summary=passed.." pass, "..failed.." fail, "..skipped.." skip"
+		testOutput(failed==0 and "DONE" or "CHECK","Summary",summary)
+		notify("IDH Self-test",summary)
+	end)
+	return true,"Self-test dimulai"
+end
 
 function S.destroy()
 	if not S.alive then return end
