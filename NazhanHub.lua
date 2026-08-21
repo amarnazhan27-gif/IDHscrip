@@ -1,13 +1,35 @@
 -- IDH Hub | Indo Hangout client helper
 
-local env = (getgenv and getgenv()) or shared
+local BUILD = "0.2.1"
+local StarterGui = game:GetService("StarterGui")
+local env = _G
+if type(getgenv)=="function" then
+	local ok,result=pcall(getgenv)
+	if ok and type(result)=="table" then env=result end
+elseif type(shared)=="table" then env=shared end
+
+local function report(message,isError)
+	local line="[IDH Hub "..BUILD.."] "..tostring(message)
+	if isError then warn(line) else print(line) end
+	if type(rconsoleprint)=="function" then pcall(rconsoleprint,line.."\n") end
+end
+local function notify(title,text)
+	pcall(function() StarterGui:SetCore("SendNotification",{Title=title,Text=text,Duration=7}) end)
+end
+local function trace(message)
+	if debug and type(debug.traceback)=="function" then return debug.traceback(tostring(message),2) end
+	return tostring(message)
+end
+
+report("starting")
+local bootOk,bootResult=xpcall(function()
 if env.IDHHub and env.IDHHub.destroy then pcall(env.IDHHub.destroy) end
 
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
 local RunService = game:GetService("RunService")
 local UIS = game:GetService("UserInputService")
-local VIM = game:GetService("VirtualInputManager")
+local VIM; pcall(function() VIM=game:GetService("VirtualInputManager") end)
 local TS = game:GetService("TweenService")
 local PFS = game:GetService("PathfindingService")
 local VU = game:GetService("VirtualUser")
@@ -60,9 +82,9 @@ local function stroke(x) make("UIStroke",{Color=C.line,Thickness=1,Transparency=
 
 local gui=make("ScreenGui",{Name="IDHHub",ResetOnSpawn=false,ZIndexBehavior=Enum.ZIndexBehavior.Sibling})
 local guiParent
-if gethui then local ok,res=pcall(gethui); if ok then guiParent=res end end
+if type(gethui)=="function" then local ok,res=pcall(gethui); if ok and typeof(res)=="Instance" then guiParent=res end end
 guiParent=guiParent or me:WaitForChild("PlayerGui")
-if syn and syn.protect_gui then pcall(syn.protect_gui,gui) end
+if type(syn)=="table" and type(syn.protect_gui)=="function" then pcall(syn.protect_gui,gui) end
 gui.Parent=guiParent
 
 local window=make("Frame",{
@@ -224,7 +246,8 @@ end
 local function setSpace(value)
 	if S.spaceDown==value then return end; S.spaceDown=value
 	local fn=value and keypress or keyrelease
-	if fn then pcall(fn,0x20) else pcall(function() VIM:SendKeyEvent(value,Enum.KeyCode.Space,false,game) end) end
+	if type(fn)=="function" then pcall(fn,0x20)
+	elseif VIM then pcall(function() VIM:SendKeyEvent(value,Enum.KeyCode.Space,false,game) end) end
 end
 local function reelGui()
 	local screen=path(me,"PlayerGui","Reeling"); local main=screen and screen:FindFirstChild("MainFrame")
@@ -488,3 +511,18 @@ on(closeBtn.MouseButton1Click,S.destroy)
 local missing=0
 for _,x in ipairs({rodRemote,pickaxeRemote,crystalFolder(),applyAvatarRemote}) do if not x then missing=missing+1 end end
 if missing>0 then subtitle.Text="Compatibility check: "..missing.." dependency missing"; subtitle.TextColor3=C.warn end
+
+return S
+end,trace)
+
+if not bootOk then
+	env.IDHBootError=bootResult
+	report(bootResult,true)
+	notify("IDH Hub gagal dimuat",tostring(bootResult):sub(1,180))
+	error("IDH Hub startup failed; buka Delta/Roblox console",0)
+end
+
+env.IDHBootError=nil
+report("loaded")
+notify("IDH Hub","Build "..BUILD.." berhasil dimuat")
+return bootResult
