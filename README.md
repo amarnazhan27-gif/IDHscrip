@@ -1,153 +1,142 @@
-# IDH Hub
+<p align="center">
+  <img src="assets/idh-header.svg" alt="IDH Hub — lightweight Indo Hangout client helper" width="100%">
+</p>
 
-Client helper untuk Indo Hangout. Fokus repo ini adalah automation yang kecil,
-mudah diperiksa, dan tidak bergantung pada UI library pihak ketiga.
+<p align="center">
+  <img src="https://img.shields.io/badge/platform-Roblox-171a20?style=flat-square" alt="Roblox">
+  <img src="https://img.shields.io/badge/language-Luau-469cff?style=flat-square" alt="Luau">
+  <img src="https://img.shields.io/badge/target-Delta_Android-20242b?style=flat-square" alt="Delta Android">
+  <img src="https://img.shields.io/badge/build-0.4.0-3dbe7e?style=flat-square" alt="Build 0.4.0">
+</p>
 
-Referensi implementasi saat ini adalah dump client
-`IDH_COMPLETE_CLIENT_DUMP.rbxlx` tanggal 17 Agustus 2026. Nama remote, struktur
-GUI, dan folder crystal diambil dari dump tersebut—bukan hasil tebak nama
-object.
+<p align="center">
+  <a href="#fitur">Fitur</a> ·
+  <a href="#menjalankan">Menjalankan</a> ·
+  <a href="#validasi">Validasi</a> ·
+  <a href="#repository-map">Repository</a> ·
+  <a href="CONTRIBUTING.md">Contributing</a>
+</p>
+
+IDH Hub adalah client helper kecil untuk Indo Hangout. Runtime memakai GUI
+native, tidak memuat UI library pihak ketiga, dan tetap tersedia sebagai satu
+file agar mudah diperiksa sebelum dijalankan.
+
+Implementasi saat ini dipetakan dari `IDH_COMPLETE_CLIENT_DUMP.rbxlx` tanggal
+17 Agustus 2026. Itu membuktikan path dan perilaku client pada dump tersebut,
+bukan kompatibilitas server tanpa batas.
 
 ## Fitur
 
-- Auto fishing dengan dua metode:
-  - `Input Assist` mengontrol `WhiteBar` terhadap `RedBar` dan membiarkan client
-    bawaan menyelesaikan proses catch.
-  - `Fast Catch` mengirim request catch langsung. Metode ini opsional karena
-    validasi server dapat berubah.
-- Auto mining dengan pathfinding terbatas menuju
-  `Workspace.MapContent.Decoration.Crystals`, interval hit 1,55 detik, batas
-  jarak/tinggi, dan cooldown untuk target yang tidak dapat dicapai.
-- Sell all fish dan crystal berdasarkan kategori yang dimuat oleh GUI game.
-- Copy avatar melalui `HumanoidDescription` dan Bloxbiz apply remote.
-- Anti-AFK dan low graphics lokal.
-- GUI native yang mobile-friendly, draggable, dan tanpa asset eksternal.
+| Modul | Perilaku |
+|---|---|
+| Auto Fishing | Cast melalui stock tool, deteksi GUI reeling, pointer assist Android, fallback Space |
+| Fast Catch | Direct catch request opsional bila input assist tidak cocok |
+| Auto Mining | Pathfinding terbatas, batas jarak/tinggi, dan cooldown target gagal |
+| Copy Avatar | `HumanoidDescription` melalui apply remote yang dipakai client |
+| Inventory | Sell fish/crystal berdasarkan kategori yang sudah dimuat GUI game |
+| Utility | Anti-AFK, low graphics lokal, compatibility scan |
 
-## Menjalankan di Delta
+Build 0.4.0 memperbaiki mini-game fishing yang berhenti di layar
+`Hold & Click Screen`. Stock client menerima klik/touch selain Space. Hub kini
+mengirim pointer input lebih dulu, mempertahankan Space sebagai fallback, dan
+mulai membantu saat GUI reel terlihat meskipun event remote terlewat.
+
+## Menjalankan
 
 1. Masuk ke Indo Hangout dan tunggu karakter selesai spawn.
-2. Buka Delta Executor.
-3. Tempel loader berikut.
-4. Jalankan sekali. Menjalankan ulang akan membersihkan sesi hub sebelumnya.
+2. Pastikan fishing rod atau pickaxe berada di Backpack.
+3. Buka Delta Executor dan jalankan loader berikut satu kali.
 
 ```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/amarnazhan27-gif/IDHscrip/main/NazhanHub.lua"))()
+loadstring(game:HttpGet("https://raw.githubusercontent.com/amarnazhan27-gif/IDHscrip/main/NazhanHub.lua", true))()
 ```
 
-Untuk hasil fishing yang paling aman terhadap server validation, mulai dengan
-`Fast Catch` dalam keadaan mati. Nyalakan hanya jika `Input Assist` tidak dapat
-mengirim tombol Space pada versi Delta/perangkat yang dipakai.
+Mulai Auto Fishing dengan `Fast Catch` mati. Saat mini-game muncul, WhiteBar
+seharusnya bergerak bolak-balik mengikuti RedBar. Gunakan Fast Catch hanya jika
+pointer assist tidak diterima oleh versi executor yang dipakai.
 
-Auto mining membutuhkan pickaxe di Backpack. Auto fishing membutuhkan rod.
-Fitur sell all membutuhkan menu SellFish atau SellCrystal pernah dibuka sekali
-agar daftar kategori sudah tersedia di `PlayerGui`.
+File entry point terpisah tetap tersedia:
 
-### Troubleshooting Delta Android
+- `autofish.lua` membuka hub dan langsung menyalakan fishing.
+- `automining.lua` membuka hub dan langsung menyalakan mining.
+- `copyavatar.lua` mengembalikan fungsi copy avatar.
 
-Build yang berhasil dimuat menampilkan notifikasi dengan nomor build saat ini
-dan dua baris console bertanda `[IDH Hub ...] starting` lalu `loaded`. Jika
-startup gagal, pesan bertanda sama akan berisi stack trace pertama dan disimpan di
-`getgenv().IDHBootError`.
+## Validasi
 
-Error seperti `UIStroke is not a valid member of TextButton` dari
-`Script 'LocalScript', Line 2684` bukan berasal dari hub ini. Abaikan error game
-tersebut dan cari prefix `[IDH Hub ...]` agar laporan bug tidak tercampur.
+Static audit:
 
-### Runtime self-test
+```bash
+./scripts/audit.sh
+```
 
-Tab `System` menyediakan tombol `Run compatibility scan`. Scan default hanya
-memeriksa dependency, tool, dan path client. Scan ini tidak menggerakkan
-karakter, tidak menjual inventory, dan tidak mengubah avatar. Ringkasan muncul
-di GUI; detail dicetak dengan prefix `[IDH Test]`.
+Safe scan dari Delta:
 
 ```lua
 local hub = loadstring(game:HttpGet("https://raw.githubusercontent.com/amarnazhan27-gif/IDHscrip/main/NazhanHub.lua", true))()
 hub.runSelfTest()
 ```
 
-Untuk runtime test fishing dan mining, gunakan mode `active`. Mode ini dapat
-menggerakkan karakter dan mengirim request game:
+Active fishing/mining test dapat menggerakkan karakter dan mengirim request:
 
 ```lua
-hub.runSelfTest({active = true})
+hub.runSelfTest({active = true, fishingWait = 25, miningWait = 10})
 ```
 
-`fastCatch = true` dapat ditambahkan untuk menguji direct catch. Copy Avatar
-dan Sell tetap tidak dijalankan kecuali diminta eksplisit karena keduanya
-mengubah avatar atau inventory:
+`PASS` pada scan berarti dependency atau path client tersedia. Reward belum
+terbukti sampai perubahan inventory atau cash terlihat di game. Prosedur lengkap
+ada di [docs/validation.md](docs/validation.md).
 
-```lua
-hub.runSelfTest({avatar = true, inventory = true})
-```
+## Client protocol
 
-`PASS` berarti client path tersedia atau request client berhasil dijalankan.
-Itu belum menjadi bukti reward server sampai perubahan inventory/cash terlihat
-di game.
-
-## Entry point terpisah
-
-File berikut tetap tersedia untuk pemakaian sederhana:
-
-- `autofish.lua` — membuka hub dan langsung menyalakan auto fishing.
-- `automining.lua` — membuka hub dan langsung menyalakan auto mining.
-- `copyavatar.lua` — mengembalikan fungsi copy avatar.
-
-Contoh copy avatar dari script lain:
-
-```lua
-loadstring(game:HttpGet("https://raw.githubusercontent.com/amarnazhan27-gif/IDHscrip/main/NazhanHub.lua"))()
-
-local hub = getgenv().IDHHub
-local ok, message = hub.copyAvatar("NamaPlayer")
-print(ok, message)
-```
-
-Nama boleh berupa username, display name, atau awal nama. Jika dikosongkan,
-hub memilih pemain terdekat.
-
-## Dasar teknis
-
-| Fitur | Client path / protocol |
+| Fitur | Path atau protocol |
 |---|---|
-| Cast | stock `Tool:Activate()` → `Events.RemoteEvent.Rod("Throw")` |
+| Cast | stock `Tool:Activate()` → `Rod("Throw")` |
 | Reeling | `PlayerGui.Reeling.MainFrame.Frame.WhiteBar/RedBar` |
-| Catch | `Events.RemoteEvent.Rod("Catch", "Catch")` |
-| Mining | stock `Tool:Activate()` → `Events.RemoteEvent.Pickaxe("Hit")` |
+| Catch | stock client → `Rod("Catch", "Catch")` |
+| Mining | stock `Tool:Activate()` → `Pickaxe("Hit")` |
 | Crystal | `Workspace.MapContent.Decoration.Crystals` |
 | Copy avatar | `BloxbizRemotes.CatalogOnApplyToRealHumanoid` |
-| Sell fish | `SellFish("CheckFish"/"SellFish", category)` |
-| Sell crystal | `SellCrystal("CheckCrystal"/"SellCrystal", category)` |
 
-Dump client tidak menyimpan server script karena FilteringEnabled. Karena itu,
-repo ini tidak mengklaim reward server atau kompatibilitas 100% hanya dari
-static audit. Bukti final tetap membutuhkan runtime test pada versi game dan
-Delta yang sedang digunakan.
+Lihat [docs/protocol.md](docs/protocol.md) untuk pemetaan dan batas buktinya.
 
-## Kontribusi
+## Repository map
 
-1. Fork repo dan buat branch dengan nama yang menjelaskan perubahan.
-2. Hindari menambah UI library atau loader tertutup tanpa alasan kuat.
-3. Jika object game berubah, sertakan path lama, path baru, dan tanggal dump.
-4. Pisahkan perubahan GUI dari perubahan protocol/remotes bila memungkinkan.
-5. Buka pull request dan jelaskan cara pengujian yang sudah dilakukan.
+```text
+IDHscrip/
+├── NazhanHub.lua          # runtime utama, single-file
+├── autofish.lua           # thin fishing entry point
+├── automining.lua         # thin mining entry point
+├── copyavatar.lua         # thin avatar entry point
+├── assets/                # identitas visual repo
+├── docs/                  # protocol dan panduan validasi
+├── evidence/              # manifest bukti tanpa dump/screenshot mentah
+└── scripts/               # static audit yang dapat diulang
+```
 
-Pull request untuk bug sebaiknya menyertakan:
+Struktur mengikuti prinsip AURUM yang relevan: source mudah ditemukan, bukti
+dipisahkan dari klaim, dan pemeriksaan dapat diulang. Folder MT5 seperti profile
+dan checksum tidak disalin karena tidak memiliki fungsi pada runtime Luau ini.
 
-- nama executor dan versinya;
-- perangkat/OS;
-- pesan error lengkap tanpa token atau data akun;
-- fitur yang aktif saat error;
-- apakah remote/folder terkait berstatus `OK` atau `MISS` pada tab System.
+## Troubleshooting
+
+Build yang berhasil dimuat menampilkan notifikasi `Build 0.4.0` dan console
+`[IDH Hub 0.4.0] starting` lalu `loaded`. Error game lain tidak berasal dari hub
+jika tidak memiliki prefix tersebut.
+
+Jika mini-game masih diam:
+
+1. Buka tab `System` dan jalankan compatibility scan.
+2. Pastikan hasil `Reel input adapter` muncul.
+3. Tutup UI Delta agar sentuhan tidak ditangkap overlay executor.
+4. Ulangi dengan Fast Catch mati dan rekam console `[IDH Test]`.
 
 ## Batasan
 
-- Update game dapat mengganti nama object, payload remote, atau server
-  validation tanpa pemberitahuan.
-- Counter dan status GUI bukan bukti bahwa reward sudah diterima server.
-- Gunakan akun uji. Automation dapat melanggar aturan game atau platform dan
-  berisiko menyebabkan pembatasan akun.
-- Repo tidak membutuhkan webhook, token, password, atau konfigurasi Discord.
+- Update game dapat mengganti object, payload, atau server validation.
+- Automation dapat melanggar aturan game/platform dan berisiko membatasi akun.
+- Gunakan akun uji. Repo tidak menjamin reward, kompatibilitas 100%, atau bebas ban.
+- Repo tidak membutuhkan webhook, token, password, atau telemetry.
 
-## Lisensi
+## License
 
-MIT. Lihat `LICENSE`.
+MIT. Lihat [LICENSE](LICENSE).

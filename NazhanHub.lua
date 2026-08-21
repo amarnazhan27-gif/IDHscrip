@@ -1,7 +1,7 @@
 --!nocheck
 -- IDH Hub | Indo Hangout client helper
 
-local BUILD = "0.3.0"
+local BUILD = "0.4.0"
 local StarterGui = game:GetService("StarterGui")
 local env = _G
 if type(getgenv)=="function" then
@@ -38,7 +38,7 @@ local me = Players.LocalPlayer
 
 local S = {
 	alive=true, fishing=false, fastCatch=false, reeling=false, mining=false,
-	antiAfk=true, lowGraphics=false, spaceDown=false, lastCast=0, lastReel=0,
+	antiAfk=true, lowGraphics=false, reelInputDown=false, lastCast=0, lastReel=0,
 	casts=0, targets=0, connections={}, version=BUILD, miningBlocked={}
 }
 env.IDHHub = S
@@ -247,16 +247,51 @@ local function equip(tool)
 	if tool.Parent~=c then hum:EquipTool(tool); task.wait(.2) end
 	return tool.Parent==c
 end
-local function setSpace(value)
-	if S.spaceDown==value then return end; S.spaceDown=value
-	local fn=value and keypress or keyrelease
-	if type(fn)=="function" then pcall(fn,0x20)
-	elseif VIM then pcall(function() VIM:SendKeyEvent(value,Enum.KeyCode.Space,false,game) end) end
+local function reelInputAdapter()
+	local routes={}
+	if VIM then table.insert(routes,"VIM mouse/key") end
+	if type(mouse1press)=="function" and type(mouse1release)=="function" then table.insert(routes,"executor mouse") end
+	if type(keypress)=="function" and type(keyrelease)=="function" then table.insert(routes,"executor key") end
+	if #routes==0 then table.insert(routes,"VirtualUser mouse") end
+	return table.concat(routes," + ")
+end
+local function setReelInput(value)
+	if S.reelInputDown==value then return end
+	S.reelInputDown=value
+	local camera=workspace.CurrentCamera
+	local viewport=camera and camera.ViewportSize or Vector2.new(800,600)
+	local point=Vector2.new(math.floor(viewport.X*.5),math.floor(viewport.Y*.35))
+	local delivered=false
+
+	-- The stock reeling script accepts MouseButton1, Touch, Space, or ButtonR2.
+	-- Send a pointer event first for Android, then keep Space as a harmless fallback.
+	if VIM then
+		local mouseOk=pcall(function() VIM:SendMouseButtonEvent(point.X,point.Y,0,value,game,0) end)
+		local keyOk=pcall(function() VIM:SendKeyEvent(value,Enum.KeyCode.Space,false,game) end)
+		delivered=mouseOk or keyOk
+	end
+	if type(mouse1press)=="function" and type(mouse1release)=="function" then
+		if type(mousemoveabs)=="function" then pcall(mousemoveabs,point.X,point.Y) end
+		local mouseFn=value and mouse1press or mouse1release
+		if pcall(mouseFn) then delivered=true end
+	end
+	if type(keypress)=="function" and type(keyrelease)=="function" then
+		local keyFn=value and keypress or keyrelease
+		if pcall(keyFn,0x20) then delivered=true end
+	end
+	if not delivered and VU then
+		local virtualOk=pcall(function()
+			local cameraFrame=camera and camera.CFrame or CFrame.new()
+			if value then VU:Button1Down(point,cameraFrame) else VU:Button1Up(point,cameraFrame) end
+		end)
+		delivered=virtualOk
+	end
+	if value and not delivered then setStatus("Reel input unavailable","Aktifkan Fast Catch atau ganti executor",C.warn) end
 end
 local function reelGui()
 	local screen=path(me,"PlayerGui","Reeling"); local main=screen and screen:FindFirstChild("MainFrame")
 	local frame=main and main:FindFirstChild("Frame")
-	return screen,frame and frame:FindFirstChild("WhiteBar"),frame and frame:FindFirstChild("RedBar"),main and path(main,"ProgressBg","ProgressBar")
+	return screen,frame and frame:FindFirstChild("WhiteBar"),frame and frame:FindFirstChild("RedBar"),main and path(main,"ProgressBg","ProgressBar"),main
 end
 local function cast()
 	if not rodRemote then setStatus("Rod remote missing","Game client may have changed",C.warn); return end
@@ -269,7 +304,7 @@ local function cast()
 end
 if rodRemote then
 	on(rodRemote.OnClientEvent,function(action,eventTool)
-		if eventTool~=S.rodTool then return end
+		if eventTool and S.rodTool and eventTool~=S.rodTool then return end
 		if action=="StartReeling" and S.fishing then
 			S.waitingBite=false; S.reeling=true; S.fastCatchSent=false; S.lastReel=os.clock()
 			setStatus("Reeling",S.fastCatch and "Fast catch request" or "Input assist active",C.good)
@@ -278,22 +313,37 @@ if rodRemote then
 					S.fastCatchSent=true; pcall(function() rodRemote:FireServer("Catch","Catch") end)
 				end
 			end) end
-		elseif action=="StopShake" then S.waitingBite=false; S.reeling=false; setSpace(false) end
+		elseif action=="StopShake" then
+			S.waitingBite=false; S.reeling=false; S.lastCast=0; setReelInput(false)
+		end
 	end)
 end
 on(RunService.RenderStepped,function()
-	if not S.alive or not S.fishing or not S.reeling or S.fastCatch then if S.spaceDown then setSpace(false) end; return end
-	local screen,white,red,progress=reelGui()
-	if not screen or not screen.Enabled then
+	local screen,white,red,progress,main=reelGui()
+	local visible=screen and screen.Enabled and main and main.Visible and white and red and white.AbsoluteSize.X>0 and red.AbsoluteSize.X>0
+	if S.alive and S.fishing and visible and not S.reeling then
+		-- Some executor/device combinations miss Rod.OnClientEvent but still show the stock GUI.
+		S.waitingBite=false; S.reeling=true; S.fastCatchSent=false; S.lastReel=os.clock()
+		setStatus("Reeling",S.fastCatch and "Fast catch request" or "Pointer assist active",C.good)
+	end
+	if S.alive and S.fishing and visible and S.fastCatch and not S.fastCatchSent then
+		S.fastCatchSent=true
+		pcall(function() rodRemote:FireServer("Catch","Catch") end)
+	end
+	if not S.alive or not S.fishing or not S.reeling or S.fastCatch then
+		if S.reelInputDown then setReelInput(false) end
+		return
+	end
+	if not visible then
 		if os.clock()-S.lastReel>.5 then
-			setSpace(false); S.reeling=false; setStatus("Reeling selesai","Menunggu cast berikutnya",C.good)
+			setReelInput(false); S.reeling=false; S.lastCast=0; setStatus("Reeling selesai","Menunggu cast berikutnya",C.good)
 		end
 		return
 	end
 	if not white or not red then return end
 	local wc=white.AbsolutePosition.X+white.AbsoluteSize.X*.5
 	local rc=red.AbsolutePosition.X+red.AbsoluteSize.X*.5
-	setSpace(wc<rc)
+	setReelInput(wc<rc)
 	if progress and progress.Size.X.Scale>=.99 then setStatus("Finishing catch","Menunggu konfirmasi client",C.good) end
 end)
 task.spawn(function()
@@ -301,7 +351,7 @@ task.spawn(function()
 		task.wait(.35)
 		if S.fishing and not S.reeling and (S.lastCast==0 or os.clock()-S.lastCast>20) then cast()
 		elseif S.reeling and os.clock()-S.lastReel>25 then
-			S.waitingBite=false; S.reeling=false; setSpace(false); setStatus("Reel timeout","Casting again",C.warn)
+			S.waitingBite=false; S.reeling=false; setReelInput(false); setStatus("Reel timeout","Casting again",C.warn)
 		end
 	end
 end)
@@ -439,7 +489,7 @@ end
 function S.setFishing(value, fastCatch)
 	S.fishing=value==true; S.fastCatch=fastCatch==true
 	if S.fishing then S.lastCast=0; S.lastReel=0 end
-	S.waitingBite=false; S.reeling=false; S.fastCatchSent=false; setSpace(false)
+	S.waitingBite=false; S.reeling=false; S.fastCatchSent=false; setReelInput(false)
 	setStatus(S.fishing and "Auto Fishing on" or "Ready",S.fishing and "Preparing rod" or "Automation stopped",S.fishing and C.good or C.muted)
 end
 function S.setMining(value)
@@ -510,12 +560,12 @@ local function setLowGraphics(v)
 end
 S.setLowGraphics=setLowGraphics
 toggle(pages.System,"Low Graphics","Kurangi efek visual lokal",false,setLowGraphics)
-local compat=card(pages.System,118)
+local compat=card(pages.System,137)
 make("TextLabel",{
 	Size=UDim2.new(1,-28,0,18),Position=UDim2.fromOffset(14,10),BackgroundTransparency=1,Text="Client compatibility",
 	TextColor3=C.text,TextSize=11,Font=Enum.Font.GothamMedium,TextXAlignment=Enum.TextXAlignment.Left
 },compat)
-local checks={{"Rod remote",rodRemote},{"Pickaxe remote",pickaxeRemote},{"Crystal folder",crystalFolder()},{"Avatar remote",applyAvatarRemote}}
+local checks={{"Rod remote",rodRemote},{"Pickaxe remote",pickaxeRemote},{"Crystal folder",crystalFolder()},{"Avatar remote",applyAvatarRemote},{"Reel input",reelInputAdapter()}}
 for i,check in ipairs(checks) do
 	make("TextLabel",{
 		Size=UDim2.new(1,-28,0,17),Position=UDim2.fromOffset(14,29+(i-1)*19),BackgroundTransparency=1,
@@ -575,6 +625,7 @@ function S.runSelfTest(options)
 			add(applyAvatarRemote and "PASS" or "FAIL","Avatar remote",applyAvatarRemote and applyAvatarRemote:GetFullName() or "missing")
 			add(findTool("rod") and "PASS" or "MISS","Fishing rod",findTool("rod") and findTool("rod").Name or "not in Backpack/Character")
 			add(findTool("pickaxe") and "PASS" or "MISS","Pickaxe",findTool("pickaxe") and findTool("pickaxe").Name or "not in Backpack/Character")
+			add("PASS","Reel input adapter",reelInputAdapter())
 			local screen,white,red,progress=reelGui()
 			add(screen and white and red and progress and "PASS" or "MISS","Reeling GUI",screen and "loaded" or "appears after a bite")
 
@@ -627,7 +678,7 @@ end
 function S.destroy()
 	if not S.alive then return end
 	if S.lowGraphics then setLowGraphics(false) end
-	S.alive=false; S.fishing=false; S.mining=false; setSpace(false)
+	S.alive=false; S.fishing=false; S.mining=false; setReelInput(false)
 	for _,c in ipairs(S.connections) do pcall(function() c:Disconnect() end) end
 	table.clear(S.connections); pcall(function() gui:Destroy() end)
 end
