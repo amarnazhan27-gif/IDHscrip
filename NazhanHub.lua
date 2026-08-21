@@ -1,6 +1,6 @@
 -- IDH Hub | Indo Hangout client helper
 
-local BUILD = "0.2.1"
+local BUILD = "0.2.2"
 local StarterGui = game:GetService("StarterGui")
 local env = _G
 if type(getgenv)=="function" then
@@ -50,7 +50,10 @@ end
 
 local function path(root, ...)
 	local node = root
-	for i=1,select("#", ...) do node = node and node:FindFirstChild(select(i, ...)) end
+	for i=1,select("#", ...) do
+		local childName=select(i, ...)
+		node=node and node:FindFirstChild(childName)
+	end
 	return node
 end
 
