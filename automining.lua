@@ -1,3 +1,4 @@
+--!nocheck
 -- Standalone Auto Mining entry point.
 local source = "https://raw.githubusercontent.com/amarnazhan27-gif/IDHscrip/main/NazhanHub.lua"
 loadstring(game:HttpGet(source))()

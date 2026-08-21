@@ -15,8 +15,9 @@ object.
     bawaan menyelesaikan proses catch.
   - `Fast Catch` mengirim request catch langsung. Metode ini opsional karena
     validasi server dapat berubah.
-- Auto mining dengan pathfinding menuju
-  `Workspace.MapContent.Decoration.Crystals` dan interval hit 1,55 detik.
+- Auto mining dengan pathfinding terbatas menuju
+  `Workspace.MapContent.Decoration.Crystals`, interval hit 1,55 detik, batas
+  jarak/tinggi, dan cooldown untuk target yang tidak dapat dicapai.
 - Sell all fish dan crystal berdasarkan kategori yang dimuat oleh GUI game.
 - Copy avatar melalui `HumanoidDescription` dan Bloxbiz apply remote.
 - Anti-AFK dan low graphics lokal.
@@ -43,9 +44,9 @@ agar daftar kategori sudah tersedia di `PlayerGui`.
 
 ### Troubleshooting Delta Android
 
-Build yang berhasil dimuat menampilkan notifikasi `IDH Hub 0.2.1` dan dua baris
-console bertanda `[IDH Hub 0.2.1] starting` lalu `loaded`. Jika startup gagal,
-pesan bertanda sama akan berisi stack trace pertama dan disimpan di
+Build yang berhasil dimuat menampilkan notifikasi dengan nomor build saat ini
+dan dua baris console bertanda `[IDH Hub ...] starting` lalu `loaded`. Jika
+startup gagal, pesan bertanda sama akan berisi stack trace pertama dan disimpan di
 `getgenv().IDHBootError`.
 
 Error seperti `UIStroke is not a valid member of TextButton` dari
@@ -54,24 +55,34 @@ tersebut dan cari prefix `[IDH Hub ...]` agar laporan bug tidak tercampur.
 
 ### Runtime self-test
 
-Hub menyediakan `runSelfTest()` untuk memeriksa dependency, GUI lifecycle,
-toggle lokal, fishing, dan mining. Hasil dicetak dengan prefix `[IDH Test]`.
+Tab `System` menyediakan tombol `Run compatibility scan`. Scan default hanya
+memeriksa dependency, tool, dan path client. Scan ini tidak menggerakkan
+karakter, tidak menjual inventory, dan tidak mengubah avatar. Ringkasan muncul
+di GUI; detail dicetak dengan prefix `[IDH Test]`.
 
 ```lua
 local hub = loadstring(game:HttpGet("https://raw.githubusercontent.com/amarnazhan27-gif/IDHscrip/main/NazhanHub.lua", true))()
 hub.runSelfTest()
 ```
 
-Copy Avatar dan Sell sengaja tidak dijalankan oleh default karena mengubah
-avatar atau inventory. Gunakan opsi berikut hanya jika perubahan tersebut
-memang diinginkan:
+Untuk runtime test fishing dan mining, gunakan mode `active`. Mode ini dapat
+menggerakkan karakter dan mengirim request game:
+
+```lua
+hub.runSelfTest({active = true})
+```
+
+`fastCatch = true` dapat ditambahkan untuk menguji direct catch. Copy Avatar
+dan Sell tetap tidak dijalankan kecuali diminta eksplisit karena keduanya
+mengubah avatar atau inventory:
 
 ```lua
 hub.runSelfTest({avatar = true, inventory = true})
 ```
 
-`PASS` berarti client path atau request berhasil dijalankan. Itu belum menjadi
-bukti reward server sampai perubahan inventory/cash terlihat di game.
+`PASS` berarti client path tersedia atau request client berhasil dijalankan.
+Itu belum menjadi bukti reward server sampai perubahan inventory/cash terlihat
+di game.
 
 ## Entry point terpisah
 
@@ -98,10 +109,10 @@ hub memilih pemain terdekat.
 
 | Fitur | Client path / protocol |
 |---|---|
-| Cast | `Events.RemoteEvent.Rod("Throw")` |
+| Cast | stock `Tool:Activate()` → `Events.RemoteEvent.Rod("Throw")` |
 | Reeling | `PlayerGui.Reeling.MainFrame.Frame.WhiteBar/RedBar` |
 | Catch | `Events.RemoteEvent.Rod("Catch", "Catch")` |
-| Mining | `Events.RemoteEvent.Pickaxe("Hit")` |
+| Mining | stock `Tool:Activate()` → `Events.RemoteEvent.Pickaxe("Hit")` |
 | Crystal | `Workspace.MapContent.Decoration.Crystals` |
 | Copy avatar | `BloxbizRemotes.CatalogOnApplyToRealHumanoid` |
 | Sell fish | `SellFish("CheckFish"/"SellFish", category)` |
