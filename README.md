@@ -41,6 +41,17 @@ Auto mining membutuhkan pickaxe di Backpack. Auto fishing membutuhkan rod.
 Fitur sell all membutuhkan menu SellFish atau SellCrystal pernah dibuka sekali
 agar daftar kategori sudah tersedia di `PlayerGui`.
 
+### Troubleshooting Delta Android
+
+Build yang berhasil dimuat menampilkan notifikasi `IDH Hub 0.2.1` dan dua baris
+console bertanda `[IDH Hub 0.2.1] starting` lalu `loaded`. Jika startup gagal,
+pesan bertanda sama akan berisi stack trace pertama dan disimpan di
+`getgenv().IDHBootError`.
+
+Error seperti `UIStroke is not a valid member of TextButton` dari
+`Script 'LocalScript', Line 2684` bukan berasal dari hub ini. Abaikan error game
+tersebut dan cari prefix `[IDH Hub ...]` agar laporan bug tidak tercampur.
+
 ## Entry point terpisah
 
 File berikut tetap tersedia untuk pemakaian sederhana:
